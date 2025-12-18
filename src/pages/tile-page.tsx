@@ -1,5 +1,8 @@
 import { LeftPane } from "@/components/left-pane"
 import { RightPane } from "@/components/right-pane"
+import { BiomassChart } from "@/components/biomass-chart"
+import { BottomPane } from "@/components/bottom-pane"
+import { SimulationTimeline } from "@/components/simulation-timeline"
 import { cn } from "@/lib/utils"
 import {
   createManagementPlan,
@@ -145,6 +148,11 @@ export function TilePage() {
       null
     )
   }, [activeSimulationId, simulationByIdCache, simulations])
+
+  const activeSimulationResult = useMemo(() => {
+    if (!activeSimulationId) return null
+    return simulationResultByRecordId[activeSimulationId] ?? null
+  }, [activeSimulationId, simulationResultByRecordId])
 
   const activePlan = useMemo(() => {
     if (!activePlanId) return null
@@ -1047,37 +1055,43 @@ export function TilePage() {
                 ) : null}
 
                 {simulationResultByRecordId[activeSimulation.id] ? (
-                  <div className="mt-2 space-y-1 text-[11px] text-zinc-700">
-                    <div>
-                      episode_length:{" "}
-                      {
-                        simulationResultByRecordId[activeSimulation.id]
-                          .episode_length
-                      }
+                  <div className="mt-2 space-y-3">
+                    <div className="space-y-1 text-[11px] text-zinc-700">
+                      <div>
+                        episode_length:{" "}
+                        {
+                          simulationResultByRecordId[activeSimulation.id]
+                            .episode_length
+                        }
+                      </div>
+                      <div>
+                        fitness:{" "}
+                        {simulationResultByRecordId[activeSimulation.id]
+                          .fitness ?? "—"}
+                      </div>
+                      <div>
+                        samples:{" "}
+                        {
+                          simulationResultByRecordId[activeSimulation.id].steps
+                            ?.length
+                        }
+                      </div>
+                      <div>
+                        shape:{" "}
+                        {simulationResultByRecordId[
+                          activeSimulation.id
+                        ].shape?.join("×")}
+                      </div>
+                      <div>
+                        species:{" "}
+                        {simulationResultByRecordId[activeSimulation.id].species
+                          ?.length ?? 0}
+                      </div>
                     </div>
-                    <div>
-                      fitness:{" "}
-                      {simulationResultByRecordId[activeSimulation.id].fitness ??
-                        "—"}
-                    </div>
-                    <div>
-                      samples:{" "}
-                      {
-                        simulationResultByRecordId[activeSimulation.id].steps
-                          ?.length
-                      }
-                    </div>
-                    <div>
-                      shape:{" "}
-                      {simulationResultByRecordId[activeSimulation.id].shape?.join(
-                        "×"
-                      )}
-                    </div>
-                    <div>
-                      species:{" "}
-                      {simulationResultByRecordId[activeSimulation.id].species
-                        ?.length ?? 0}
-                    </div>
+
+                    <BiomassChart
+                      result={simulationResultByRecordId[activeSimulation.id]}
+                    />
                   </div>
                 ) : null}
               </div>
@@ -1085,6 +1099,15 @@ export function TilePage() {
           </div>
         ) : null}
       </RightPane>
+
+      {activeSimulationId && activeSimulationResult ? (
+        <BottomPane>
+          <div className="text-xs font-semibold text-zinc-900">Timeline</div>
+          <div className="mt-2">
+            <SimulationTimeline episodeLength={activeSimulationResult.episode_length} />
+          </div>
+        </BottomPane>
+      ) : null}
     </>
   )
 }

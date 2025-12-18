@@ -9,9 +9,11 @@ import {
   hoveredTileIdAtom,
   hoveredTileImageOverlayAtom,
   selectedTileIdAtom,
+  simulationResultByRecordIdAtom,
   tileByIdCacheAtom,
   tilesListAtom,
 } from "@/state/ecotwin-atoms"
+import { simulationStepAtom } from "@/state/simulation-ui-state"
 
 const mapboxAccessToken =
   import.meta.env.VITE_MAPBOX_TOKEN ??
@@ -38,6 +40,51 @@ function tileCornerLngLat(x: number, y: number, zoom: number) {
   return { lng, lat }
 }
 
+function decodeBase64ToArrayBuffer(b64: string) {
+  const binary = atob(b64)
+  const len = binary.length
+  const bytes = new Uint8Array(len)
+  for (let i = 0; i < len; i++) bytes[i] = binary.charCodeAt(i)
+  return bytes.buffer
+}
+
+const biomassPalette = [
+  "#2563eb",
+  "#16a34a",
+  "#f59e0b",
+  "#ef4444",
+  "#a855f7",
+  "#14b8a6",
+  "#f97316",
+  "#0ea5e9",
+]
+
+function hexToRgb(hex: string) {
+  const m = /^#?([a-f\d]{2})([a-f\d]{2})([a-f\d]{2})$/i.exec(hex)
+  if (!m) return { r: 0, g: 0, b: 0 }
+  return {
+    r: Number.parseInt(m[1], 16),
+    g: Number.parseInt(m[2], 16),
+    b: Number.parseInt(m[3], 16),
+  }
+}
+
+function findFrameIndex(steps: number[], target: number) {
+  if (!steps.length) return 0
+  if (target <= steps[0]) return 0
+  if (target >= steps[steps.length - 1]) return steps.length - 1
+  let lo = 0
+  let hi = steps.length - 1
+  while (lo <= hi) {
+    const mid = (lo + hi) >> 1
+    const v = steps[mid]!
+    if (v === target) return mid
+    if (v < target) lo = mid + 1
+    else hi = mid - 1
+  }
+  return Math.max(0, hi)
+}
+
 export function MapViewport() {
   const [mapError, setMapError] = useState<string | null>(null)
   const [mapLoaded, setMapLoaded] = useState(false)
@@ -48,11 +95,16 @@ export function MapViewport() {
   const selectedTileId = useAtomValue(selectedTileIdAtom)
   const setSelectedTileId = useSetAtom(selectedTileIdAtom)
   const hoveredImageOverlay = useAtomValue(hoveredTileImageOverlayAtom)
+  const simulationResultByRecordId = useAtomValue(simulationResultByRecordIdAtom)
+  const simulationStep = useAtomValue(simulationStepAtom)
 
   const token = mapboxToken || undefined
   const mapRef = useRef<MapRef | null>(null)
+  const biomassCanvasRef = useRef<HTMLCanvasElement | null>(null)
   const tileRouteMatch = useMatch("/tile/:tileId/*")
+  const simulationRouteMatch = useMatch("/tile/:tileId/simulation/:simulationId")
   const routeTileId = tileRouteMatch?.params?.tileId
+  const routeSimulationId = simulationRouteMatch?.params?.simulationId
   const isTileRoute = Boolean(tileRouteMatch)
   const lastRouteZoomedTileIdRef = useRef<string | null>(null)
 
@@ -81,6 +133,110 @@ export function MapViewport() {
   )
 
   const activeOutlineTileId = hoveredTileId ?? selectedTileId
+
+  const biomassBase = useMemo(() => {
+    if (!routeTileId || !routeSimulationId) return null
+    const result = simulationResultByRecordId[routeSimulationId]
+    if (!result) return null
+    const tile = getTileById(routeTileId)
+    if (!tile) return null
+
+    const shape = result.shape
+    if (!Array.isArray(shape) || shape.length !== 4) return null
+    const [n, h, w, s] = shape.map((v) => Number(v))
+    if (![n, h, w, s].every((v) => Number.isFinite(v) && v > 0)) return null
+
+    const steps =
+      Array.isArray(result.steps) && result.steps.length === n
+        ? result.steps.map((v) => Number(v))
+        : Array.from({ length: n }, (_, i) => i)
+
+    const buffer = decodeBase64ToArrayBuffer(result.biomass_b64)
+    const data = new Float32Array(buffer)
+    const expected = n * h * w * s
+    if (data.length < expected) return null
+
+    const topLeft = tileCornerLngLat(tile.x, tile.y, tile.zoom)
+    const bottomRight = tileCornerLngLat(tile.x + 1, tile.y + 1, tile.zoom)
+    const topRight = { lng: bottomRight.lng, lat: topLeft.lat }
+    const bottomLeft = { lng: topLeft.lng, lat: bottomRight.lat }
+
+    const coordinates: mapboxgl.ImageSourceSpecification["coordinates"] = [
+      [topLeft.lng, topLeft.lat],
+      [topRight.lng, topRight.lat],
+      [bottomRight.lng, bottomRight.lat],
+      [bottomLeft.lng, bottomLeft.lat],
+    ]
+
+    return { data, steps, h, w, s, coordinates }
+  }, [getTileById, routeSimulationId, routeTileId, simulationResultByRecordId])
+
+  const biomassOverlay = useMemo(() => {
+    if (!biomassBase) return null
+    const frame = findFrameIndex(
+      biomassBase.steps,
+      Math.max(0, Math.floor(simulationStep))
+    )
+    return { ...biomassBase, frame }
+  }, [biomassBase, simulationStep])
+
+  useEffect(() => {
+    if (!biomassOverlay) return
+    const canvas = biomassCanvasRef.current
+    if (!canvas) return
+    const ctx = canvas.getContext("2d")
+    if (!ctx) return
+
+    const { data, frame, h, w, s } = biomassOverlay
+
+    canvas.width = w
+    canvas.height = h
+
+    const pixels = new Uint8ClampedArray(w * h * 4)
+
+    const frameOffset = frame * h * w * s
+    let maxV = 0
+    for (let i = 0; i < h * w * s; i++) {
+      const v = data[frameOffset + i] ?? 0
+      if (v > maxV) maxV = v
+    }
+    if (maxV <= 0) maxV = 1
+
+    for (let y = 0; y < h; y++) {
+      for (let x = 0; x < w; x++) {
+        // Data orientation fix:
+        // The upstream biomass grid axes don't match our tile orientation.
+        // Rotate 90° left and flip vertically (for square grids this is equivalent to transpose).
+        const dataX = y
+        const dataY = x
+        const cellBase = frameOffset + (dataY * w + dataX) * s
+        let bestSp = 0
+        let bestV = -Infinity
+        for (let sp = 0; sp < s; sp++) {
+          const v = data[cellBase + sp] ?? 0
+          if (v > bestV) {
+            bestV = v
+            bestSp = sp
+          }
+        }
+
+        const rgb = hexToRgb(biomassPalette[bestSp % biomassPalette.length]!)
+        const t = Math.max(0, Math.min(1, bestV / maxV))
+        const r = Math.round(255 * (1 - t) + rgb.r * t)
+        const g = Math.round(255 * (1 - t) + rgb.g * t)
+        const b = Math.round(255 * (1 - t) + rgb.b * t)
+
+        const p = (y * w + x) * 4
+        pixels[p + 0] = r
+        pixels[p + 1] = g
+        pixels[p + 2] = b
+        pixels[p + 3] = 255
+      }
+    }
+
+    ctx.putImageData(new ImageData(pixels, w, h), 0, 0)
+    mapRef.current?.getMap?.().triggerRepaint()
+  }, [biomassOverlay])
 
   useEffect(() => {
     if (!routeTileId) {
@@ -230,7 +386,13 @@ export function MapViewport() {
 	            setMapError(message)
 	            console.error(e.error ?? e)
 	          }}
-	        >
+        >
+          <canvas
+            id="biomass-canvas"
+            ref={biomassCanvasRef}
+            className="pointer-events-none absolute -left-[9999px] -top-[9999px] opacity-0"
+          />
+
           {hoveredImageOverlaySource ? (
             <Source
 	              id="hovered-tile-image"
@@ -244,6 +406,24 @@ export function MapViewport() {
                 paint={{
                   "raster-opacity": hoveredImageOverlaySource.opacity,
                   "raster-resampling": hoveredImageOverlaySource.resampling,
+                }}
+              />
+            </Source>
+          ) : null}
+
+          {biomassOverlay ? (
+            <Source
+              id="biomass-overlay"
+              type="canvas"
+              canvas="biomass-canvas"
+              coordinates={biomassOverlay.coordinates}
+            >
+              <Layer
+                id="biomass-overlay-layer"
+                type="raster"
+                paint={{
+                  "raster-opacity": 0.75,
+                  "raster-resampling": "nearest",
                 }}
               />
             </Source>
