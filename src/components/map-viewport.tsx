@@ -268,50 +268,68 @@ export function MapViewport() {
           ) : null}
 
           {tileMarkers.map(({ tile, lng, lat }) => (
-            <Marker
-              key={tile.id}
-              longitude={lng}
-              latitude={lat}
-              anchor="bottom"
-            >
-              {(() => {
-                const isActive =
-                  hoveredTileId === tile.id || selectedTileId === tile.id
+            (() => {
+              const isActive =
+                hoveredTileId === tile.id || selectedTileId === tile.id
+              const isZoomedToTile = isTileRoute && routeTileId === tile.id
+
+              if (isZoomedToTile) {
+                const topLeft = tileCornerLngLat(tile.x, tile.y, tile.zoom)
                 return (
-              <div
-                className="pointer-events-auto flex cursor-pointer select-none flex-col items-center"
-                onMouseEnter={() => setHoveredTileId(tile.id)}
-                onMouseLeave={() => {
-                  if (hoveredTileId === tile.id) setHoveredTileId(null)
-                }}
-                onClick={(e) => {
-                  e.preventDefault()
-                  e.stopPropagation()
-                  setSelectedTileId(tile.id)
-                }}
-              >
-                <div
-                  className={[
-                    "mb-1 max-w-40 truncate rounded-md px-2 py-1 text-[11px] font-medium shadow-sm ring-1 ring-black/10",
-                    isActive
-                      ? "bg-white text-zinc-900"
-                      : "bg-white/95 text-zinc-900",
-                  ].join(" ")}
-                >
-                  {tile.name || "Untitled tile"}
-                </div>
-                <div
-                  className={[
-                    "rounded-full bg-zinc-900 ring-2 ring-white transition-[width,height,box-shadow] duration-150",
-                    isActive
-                      ? "h-3.5 w-3.5 shadow-md"
-                      : "h-2.5 w-2.5",
-                  ].join(" ")}
-                />
-              </div>
+                  <Marker
+                    key={tile.id}
+                    longitude={topLeft.lng}
+                    latitude={topLeft.lat}
+                    anchor="top-left"
+                  >
+                    <div className="pointer-events-none translate-x-2 translate-y-2 select-none">
+                      <div className="max-w-44 truncate rounded-md bg-white px-2 py-1 text-[11px] font-medium text-zinc-900 shadow-sm ring-1 ring-black/10">
+                        {tile.name || "Untitled tile"}
+                      </div>
+                    </div>
+                  </Marker>
                 )
-              })()}
-            </Marker>
+              }
+
+              return (
+                <Marker
+                  key={tile.id}
+                  longitude={lng}
+                  latitude={lat}
+                  anchor="bottom"
+                >
+                  <div
+                    className="pointer-events-auto flex cursor-pointer select-none flex-col items-center"
+                    onMouseEnter={() => setHoveredTileId(tile.id)}
+                    onMouseLeave={() => {
+                      if (hoveredTileId === tile.id) setHoveredTileId(null)
+                    }}
+                    onClick={(e) => {
+                      e.preventDefault()
+                      e.stopPropagation()
+                      setSelectedTileId(tile.id)
+                    }}
+                  >
+                    <div
+                      className={[
+                        "mb-1 max-w-40 truncate rounded-md px-2 py-1 text-[11px] font-medium shadow-sm ring-1 ring-black/10",
+                        isActive
+                          ? "bg-white text-zinc-900"
+                          : "bg-white/95 text-zinc-900",
+                      ].join(" ")}
+                    >
+                      {tile.name || "Untitled tile"}
+                    </div>
+                    <div
+                      className={[
+                        "rounded-full bg-zinc-900 ring-2 ring-white transition-[width,height,box-shadow] duration-150",
+                        isActive ? "h-3.5 w-3.5 shadow-md" : "h-2.5 w-2.5",
+                      ].join(" ")}
+                    />
+                  </div>
+                </Marker>
+              )
+            })()
           ))}
         </Map>
       ) : (
