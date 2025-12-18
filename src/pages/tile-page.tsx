@@ -4,6 +4,7 @@ import { cn } from "@/lib/utils"
 import {
   createManagementPlan,
   createSimulation,
+  deleteSimulation,
   fileUrl,
   getTile,
   updateTile,
@@ -30,6 +31,10 @@ import {
   simulationResultByRecordIdAtom,
   simulationResultErrorAtom,
   simulationResultLoadingAtom,
+  simAgentsAtom,
+  simAgentsErrorAtom,
+  simAgentsLoadingAtom,
+  refreshSimAgentsAtom,
   simulationsAtom,
   tileByIdCacheAtom,
   tileByIdErrorAtom,
@@ -45,7 +50,12 @@ import {
   useParams,
   useSearchParams,
 } from "react-router-dom"
-import type { ManagementPlan, Simulation } from "@/state/ecotwin-types"
+import type {
+  ManagementPlan,
+  SimAgent,
+  SimAgentsResponse,
+  Simulation,
+} from "@/state/ecotwin-types"
 
 type TileSimulationRef = Pick<Simulation, "id" | "plan" | "expand">
 
@@ -82,6 +92,9 @@ export function TilePage() {
   const simulationResultByRecordId = useAtomValue(simulationResultByRecordIdAtom)
   const simulationResultLoading = useAtomValue(simulationResultLoadingAtom)
   const simulationResultError = useAtomValue(simulationResultErrorAtom)
+  const simAgents = useAtomValue(simAgentsAtom)
+  const simAgentsLoading = useAtomValue(simAgentsLoadingAtom)
+  const simAgentsError = useAtomValue(simAgentsErrorAtom)
   const landcoversById = useAtomValue(landcoversByIdAtom)
   const oceanDataById = useAtomValue(oceanDataByIdAtom)
   const tileByIdLoading = useAtomValue(tileByIdLoadingAtom)
@@ -92,12 +105,15 @@ export function TilePage() {
   const fetchLandcover = useSetAtom(fetchLandcoverAtom)
   const fetchOceanData = useSetAtom(fetchOceanDataAtom)
   const setHoveredTileImageOverlay = useSetAtom(hoveredTileImageOverlayAtom)
+  const refreshSimAgents = useSetAtom(refreshSimAgentsAtom)
   const fetchSimulationResultByRecordId = useSetAtom(
     fetchSimulationResultByRecordIdAtom
   )
   const setTileByIdCache = useSetAtom(tileByIdCacheAtom)
   const setTilesList = useSetAtom(tilesListAtom)
   const setSimulations = useSetAtom(simulationsAtom)
+  const setSimulationByIdCache = useSetAtom(simulationByIdCacheAtom)
+  const setSimulationResultByRecordId = useSetAtom(simulationResultByRecordIdAtom)
   const setManagementPlans = useSetAtom(managementPlansAtom)
   const setSelectedTileId = useSetAtom(selectedTileIdAtom)
   const setHoveredTileId = useSetAtom(hoveredTileIdAtom)
@@ -106,10 +122,15 @@ export function TilePage() {
   const managementPlanNameDirtyRef = useRef(false)
   const [simulationPlanId, setSimulationPlanId] = useState("")
   const [simulationIdText, setSimulationIdText] = useState("")
+  const [simulationAgent, setSimulationAgent] = useState("")
   const [simulationOptionsText, setSimulationOptionsText] = useState("{}")
   const simulationOptionsDirtyRef = useRef(false)
   const [creating, setCreating] = useState(false)
   const [createError, setCreateError] = useState<string | null>(null)
+  const [deletingSimulation, setDeletingSimulation] = useState(false)
+  const [deleteSimulationError, setDeleteSimulationError] = useState<string | null>(
+    null
+  )
 
   const simulationRouteMatch = useMatch("/tile/:tileId/simulation/:simulationId")
   const planRouteMatch = useMatch("/tile/:tileId/management-plan/:planId")
@@ -195,6 +216,11 @@ export function TilePage() {
   }, [create])
 
   useEffect(() => {
+    setDeleteSimulationError(null)
+    setDeletingSimulation(false)
+  }, [activeSimulationId])
+
+  useEffect(() => {
     if (create !== "management-plan") return
     if (managementPlanNameDirtyRef.current) return
     const suggested = tile?.name ? `${tile.name} plan` : "New management plan"
@@ -206,6 +232,39 @@ export function TilePage() {
     if (simulationOptionsDirtyRef.current) return
     setSimulationOptionsText("{}")
   }, [create])
+
+  useEffect(() => {
+    if (create !== "simulation") return
+    if (simAgents || simAgentsLoading) return
+    void refreshSimAgents()
+  }, [create, refreshSimAgents, simAgents, simAgentsLoading])
+
+  const agentOptions = useMemo(() => {
+    const res: { label: string; value: string; details?: string }[] = []
+    const list = simAgents as SimAgentsResponse | null
+    if (!list) return res
+    if (Array.isArray(list) && list.length > 0 && typeof list[0] === "string") {
+      for (const v of list as string[]) res.push({ label: v, value: v })
+      return res
+    }
+
+    for (const agent of list as SimAgent[]) {
+      const value =
+        agent.modelPath ?? agent.model_path ?? agent.path ?? agent.name
+      const details = [
+        agent.kind ? `kind: ${agent.kind}` : null,
+        agent.species?.length ? `species: ${agent.species.join(", ")}` : null,
+      ]
+        .filter(Boolean)
+        .join(" · ")
+      res.push({
+        label: agent.name,
+        value,
+        details: details || undefined,
+      })
+    }
+    return res
+  }, [simAgents])
 
   useEffect(() => {
     if (!activeSimulationId) return
@@ -342,7 +401,21 @@ export function TilePage() {
       const data: Parameters<typeof createSimulation>[0] = {}
       if (simulationPlanId) data.plan = simulationPlanId
       if (simulationIdText.trim()) data.simulationId = simulationIdText.trim()
-      if (options !== undefined) data.options = options
+      if (options !== undefined || simulationAgent) {
+        const base: Record<string, unknown> =
+          options && typeof options === "object"
+            ? (options as Record<string, unknown>)
+            : {}
+        if (simulationAgent) {
+          if (
+            typeof base.modelPath !== "string" &&
+            typeof base.model_path !== "string"
+          ) {
+            base.modelPath = simulationAgent
+          }
+        }
+        data.options = base
+      }
 
       const sim = await createSimulation(data)
       const nextSimulations = Array.from(
@@ -358,6 +431,52 @@ export function TilePage() {
       setCreateError(err instanceof Error ? err.message : String(err))
     } finally {
       setCreating(false)
+    }
+  }
+
+  const onDeleteActiveSimulation = async () => {
+    if (!tileId || !activeSimulationId) return
+
+    const ok = window.confirm("Delete this simulation? This cannot be undone.")
+    if (!ok) return
+
+    setDeletingSimulation(true)
+    setDeleteSimulationError(null)
+
+    try {
+      const tileRecord =
+        tile ?? (await getTile(tileId))
+
+      const current = Array.isArray(tileRecord.simulations)
+        ? tileRecord.simulations
+        : []
+      const nextSimulations = current.filter((id) => id !== activeSimulationId)
+
+      await updateTile(tileId, { simulations: nextSimulations })
+      await deleteSimulation(activeSimulationId)
+
+      setSimulations((prev) =>
+        prev ? prev.filter((s) => s.id !== activeSimulationId) : prev
+      )
+      setSimulationByIdCache((prev) => {
+        if (!(activeSimulationId in prev)) return prev
+        const next = { ...prev }
+        delete next[activeSimulationId]
+        return next
+      })
+      setSimulationResultByRecordId((prev) => {
+        if (!(activeSimulationId in prev)) return prev
+        const next = { ...prev }
+        delete next[activeSimulationId]
+        return next
+      })
+
+      await refreshTileInCaches()
+      navigate(`/tile/${tileId}`)
+    } catch (err) {
+      setDeleteSimulationError(err instanceof Error ? err.message : String(err))
+    } finally {
+      setDeletingSimulation(false)
     }
   }
 
@@ -487,12 +606,49 @@ export function TilePage() {
                     </option>
                   ))}
                 </select>
-              </label>
+	              </label>
 
-              <label className="mt-3 block text-[11px] font-medium text-zinc-800">
-                Simulation ID (optional)
-                <input
-                  value={simulationIdText}
+	              <label className="mt-3 block text-[11px] font-medium text-zinc-800">
+	                Agent (optional)
+	                <select
+	                  value={simulationAgent}
+	                  onChange={(e) => setSimulationAgent(e.target.value)}
+	                  className="mt-1 w-full rounded-md bg-white px-2 py-1 text-xs text-zinc-900 shadow-sm ring-1 ring-black/10 focus:outline-none focus:ring-2 focus:ring-zinc-900/20"
+	                >
+	                  <option value="">Default</option>
+	                  {agentOptions.map((opt) => (
+	                    <option key={opt.value} value={opt.value}>
+	                      {opt.label}
+	                    </option>
+	                  ))}
+	                </select>
+	                {simAgentsError ? (
+	                  <div className="mt-1 text-[11px] text-red-700">
+	                    Failed to load agents: {simAgentsError.message}
+	                  </div>
+	                ) : simAgentsLoading ? (
+	                  <div className="mt-1 text-[11px] text-zinc-600">
+	                    Loading agents…
+	                  </div>
+	                ) : null}
+	                {simulationAgent
+	                  ? (() => {
+	                      const selected = agentOptions.find(
+	                        (o) => o.value === simulationAgent
+	                      )
+	                      return selected?.details ? (
+	                        <div className="mt-1 text-[11px] text-zinc-600">
+	                          {selected.details}
+	                        </div>
+	                      ) : null
+	                    })()
+	                  : null}
+	              </label>
+
+	              <label className="mt-3 block text-[11px] font-medium text-zinc-800">
+	                Simulation ID (optional)
+	                <input
+	                  value={simulationIdText}
                   onChange={(e) => setSimulationIdText(e.target.value)}
                   className="mt-1 w-full rounded-md bg-white px-2 py-1 text-xs text-zinc-900 shadow-sm ring-1 ring-black/10 focus:outline-none focus:ring-2 focus:ring-zinc-900/20"
                   placeholder="UUID from /simulate/upload"
@@ -832,13 +988,43 @@ export function TilePage() {
                 (activeSimulation?.plan ? activeSimulation.plan : "—")}
             </div>
             <div className="mt-1 text-[11px] text-zinc-700">
-              simulationId:{" "}
-              {activeSimulation?.simulationId ? (
-                <span className="font-mono">{activeSimulation.simulationId}</span>
+              Options:{" "}
+              {activeSimulation?.options ? (
+                <span className="font-mono">{"{…}"}</span>
               ) : (
                 <span className="text-zinc-500">—</span>
               )}
             </div>
+
+            <div className="mt-3 flex items-center gap-2">
+              <button
+                type="button"
+                disabled={simulationResultLoading}
+                onClick={() =>
+                  void fetchSimulationResultByRecordId({
+                    simulationRecordId: activeSimulationId,
+                    forceRun: true,
+                  })
+                }
+                className="inline-flex cursor-pointer items-center rounded-md bg-zinc-900 px-2 py-1 text-[11px] font-medium text-white shadow-sm disabled:cursor-not-allowed disabled:opacity-60"
+              >
+                {simulationResultLoading ? "Running…" : "Run simulation"}
+              </button>
+              <button
+                type="button"
+                disabled={deletingSimulation}
+                onClick={() => void onDeleteActiveSimulation()}
+                className="inline-flex cursor-pointer items-center rounded-md bg-red-600 px-2 py-1 text-[11px] font-medium text-white shadow-sm hover:bg-red-700 disabled:cursor-not-allowed disabled:opacity-60"
+              >
+                {deletingSimulation ? "Deleting…" : "Delete"}
+              </button>
+            </div>
+
+            {deleteSimulationError ? (
+              <div className="mt-2 rounded-md bg-red-50 px-2 py-1 text-[11px] text-red-700 ring-1 ring-red-200">
+                {deleteSimulationError}
+              </div>
+            ) : null}
 
             {simulationByIdError && !activeSimulation ? (
               <div className="mt-2 rounded-md bg-red-50 px-2 py-1 text-[11px] text-red-700 ring-1 ring-red-200">
@@ -854,29 +1040,6 @@ export function TilePage() {
 
             {activeSimulation ? (
               <div className="mt-3">
-                <div className="flex items-center gap-2">
-                  <button
-                    type="button"
-                    disabled={
-                      simulationResultLoading || !activeSimulation.simulationId
-                    }
-                    onClick={() =>
-                      void fetchSimulationResultByRecordId({
-                        simulationRecordId: activeSimulation.id,
-                      })
-                    }
-                    className="inline-flex cursor-pointer items-center rounded-md bg-zinc-900 px-2 py-1 text-[11px] font-medium text-white shadow-sm disabled:cursor-not-allowed disabled:opacity-60"
-                  >
-                    {simulationResultLoading ? "Fetching…" : "Fetch data"}
-                  </button>
-                  {!activeSimulation.simulationId ? (
-                    <div className="text-[11px] text-zinc-600">
-                      Set a <span className="font-mono">simulationId</span> to
-                      fetch results.
-                    </div>
-                  ) : null}
-                </div>
-
                 {simulationResultError ? (
                   <div className="mt-2 rounded-md bg-red-50 px-2 py-1 text-[11px] text-red-700 ring-1 ring-red-200">
                     {simulationResultError.message}

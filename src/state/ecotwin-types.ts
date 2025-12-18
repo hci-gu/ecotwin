@@ -64,7 +64,16 @@ export type Timestep = RecordModel & {
   simulation: Id
 }
 
-export type SimAgentsResponse = unknown
+export type SimAgent = {
+  name: string
+  kind?: "multi" | "single"
+  species?: string[]
+  modelPath?: string
+  model_path?: string
+  path?: string
+}
+
+export type SimAgentsResponse = string[] | SimAgent[]
 export type SimulationResultBase64 = {
   simulation_id: string
   world_size: number

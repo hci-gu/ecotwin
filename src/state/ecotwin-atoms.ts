@@ -21,6 +21,7 @@ import {
   listTasks,
   listTiles,
   logoutUser,
+  runSimulationByRecordId,
 } from "@/state/ecotwin-api"
 import type {
   Heightmap,
@@ -413,10 +414,6 @@ export const fetchSimulationResultByRecordIdAtom = atom(
         get(simulationByIdCacheAtom)[simulationRecordId] ??
         (await getSimulation(simulationRecordId, { expand: "plan,plan.tasks" }))
 
-      if (!sim.simulationId) {
-        throw new Error("Simulation has no simulationId (upload required).")
-      }
-
       if (!args.forceRun && sim.resultJson) {
         const url = fileUrl(sim, sim.resultJson)
         if (url) {
@@ -429,9 +426,24 @@ export const fetchSimulationResultByRecordIdAtom = atom(
         }
       }
 
-      const res = await fetchSimulationResult(sim.simulationId, {
+      const userOptions = args.options ?? {}
+      let defaultModelPath: { agent?: string; } = {}
+      const simOptions = sim.options
+      // Only pass agent if present in simOptions and not overridden by userOptions
+      if (simOptions && typeof simOptions === "object") {
+        const opt = simOptions as Record<string, unknown>
+        if (
+          typeof opt.agent === "string" &&
+          !("agent" in userOptions)
+        ) {
+          defaultModelPath = { agent: opt.agent }
+        }
+      }
+
+      const res = await runSimulationByRecordId(simulationRecordId, {
         format: "base64",
-        ...args.options,
+        ...defaultModelPath,
+        ...userOptions,
       })
       set(simulationResultByRecordIdAtom, (prev) => ({
         ...prev,

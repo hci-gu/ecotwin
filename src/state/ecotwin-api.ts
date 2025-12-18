@@ -139,10 +139,21 @@ export async function fetchSimulationResult(
     include_final?: boolean
     modelPath?: string
     model_path?: string
+    agent?: string
     format?: "base64" | "npz"
   }
 ) {
   return pb.send<SimByIdResponse>(`/simulate/${simulationId}`, {
+    method: "GET",
+    query: options,
+  })
+}
+
+export async function runSimulationByRecordId(
+  simulationRecordId: string,
+  options?: Parameters<typeof fetchSimulationResult>[1]
+) {
+  return pb.send<SimByIdResponse>(`/simulation/${simulationRecordId}/run`, {
     method: "GET",
     query: options,
   })
@@ -157,6 +168,10 @@ export async function createSimulation(
   data: Partial<Pick<Simulation, "plan" | "options" | "simulationId">>
 ) {
   return pb.collection("simulations").create<Simulation>(data)
+}
+
+export async function deleteSimulation(id: string) {
+  return pb.collection("simulations").delete(id)
 }
 
 export async function simulateUpload(body: BodyInit) {
