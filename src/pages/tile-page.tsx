@@ -154,6 +154,23 @@ export function TilePage() {
     return simulationResultByRecordId[activeSimulationId] ?? null
   }, [activeSimulationId, simulationResultByRecordId])
 
+  useEffect(() => {
+    if (!activeSimulationId) return
+    if (activeSimulationResult) return
+    if (!activeSimulation?.resultJson) return
+    if (simulationResultLoading) return
+    void fetchSimulationResultByRecordId({
+      simulationRecordId: activeSimulationId,
+      cachedOnly: true,
+    })
+  }, [
+    activeSimulation?.resultJson,
+    activeSimulationId,
+    activeSimulationResult,
+    fetchSimulationResultByRecordId,
+    simulationResultLoading,
+  ])
+
   const activePlan = useMemo(() => {
     if (!activePlanId) return null
     return (

@@ -398,6 +398,7 @@ export const fetchSimulationResultByRecordIdAtom = atom(
       simulationRecordId: string
       options?: Parameters<typeof fetchSimulationResult>[1]
       forceRun?: boolean
+      cachedOnly?: boolean
     }
   ) => {
     if (get(simulationResultLoadingAtom))
@@ -416,15 +417,22 @@ export const fetchSimulationResultByRecordIdAtom = atom(
 
       if (!args.forceRun && sim.resultJson) {
         const url = fileUrl(sim, sim.resultJson)
-        if (url) {
-          const res = (await fetch(url).then((r) => r.json())) as SimulationResultBase64
-          set(simulationResultByRecordIdAtom, (prev) => ({
-            ...prev,
-            [simulationRecordId]: res,
-          }))
-          return res
+        if (!url) {
+          set(
+            simulationResultErrorAtom,
+            new Error("Simulation has cached resultJson but file URL could not be resolved.")
+          )
+          return undefined
         }
+        const res = (await fetch(url).then((r) => r.json())) as SimulationResultBase64
+        set(simulationResultByRecordIdAtom, (prev) => ({
+          ...prev,
+          [simulationRecordId]: res,
+        }))
+        return res
       }
+
+      if (args.cachedOnly) return undefined
 
       const userOptions = args.options ?? {}
       let defaultModelPath: { agent?: string; } = {}

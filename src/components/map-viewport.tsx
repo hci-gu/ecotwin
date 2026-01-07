@@ -1,18 +1,42 @@
 import mapboxgl from "mapbox-gl"
-import type { ErrorEvent } from "mapbox-gl"
-import {
-  FlyToInterpolator,
-  type LayersList,
-  type MapViewState,
-  WebMercatorViewport,
-} from "@deck.gl/core"
-import { PolygonLayer, ScatterplotLayer, TextLayer } from "@deck.gl/layers"
-import DeckGL, { ZoomWidget } from "@deck.gl/react"
+import type { ErrorEvent, MapLayerMouseEvent } from "mapbox-gl"
+import type { LayersList, PickingInfo } from "@deck.gl/core"
 import { useCallback, useEffect, useMemo, useRef, useState } from "react"
-import Map, { Layer, Source, type MapRef } from "react-map-gl/mapbox"
+import Map, {
+  Layer,
+  NavigationControl,
+  Source,
+  type MapRef,
+  type ViewStateChangeEvent,
+} from "react-map-gl/mapbox"
 import { useAtomValue, useSetAtom } from "jotai"
 import { useMatch } from "react-router-dom"
 
+import {
+  createBiomassH3HexagonLayer,
+  createBiomassScreenGridLayer,
+  formatTileLabel,
+  MapboxDeckOverlay,
+  MapboxTileOverlays,
+  TILE_DOTS_LAYER_ID,
+  TILE_HIT_AREA_LAYER_ID,
+  tileCenterLngLat,
+  tileCornerLngLat,
+  type BiomassBounds,
+  type BiomassHexDatum,
+  type BiomassOverlayFrame,
+  type OutlineDatum,
+  type TileMarkerDatum,
+  type ZoomedTileLabelDatum,
+} from "@/map-layers"
+import {
+  Select,
+  SelectContent,
+  SelectGroup,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select"
 import {
   hoveredTileIdAtom,
   hoveredTileImageOverlayAtom,
@@ -21,8 +45,7 @@ import {
   tileByIdCacheAtom,
   tilesListAtom,
 } from "@/state/ecotwin-atoms"
-import type { Tile } from "@/state/ecotwin-types"
-import { simulationStepAtom } from "@/state/simulation-ui-state"
+import { biomassVisualizationAtom, simulationStepAtom } from "@/state/simulation-ui-state"
 
 const mapboxAccessToken =
   import.meta.env.VITE_MAPBOX_TOKEN ??
@@ -33,22 +56,6 @@ if (mapboxToken) {
   mapboxgl.accessToken = mapboxToken
 }
 
-function tileCenterLngLat(x: number, y: number, zoom: number) {
-  const n = 2 ** zoom
-  const lng = ((x + 0.5) / n) * 360 - 180
-  const latRad = Math.atan(Math.sinh(Math.PI * (1 - (2 * (y + 0.5)) / n)))
-  const lat = (latRad * 180) / Math.PI
-  return { lng, lat }
-}
-
-function tileCornerLngLat(x: number, y: number, zoom: number) {
-  const n = 2 ** zoom
-  const lng = (x / n) * 360 - 180
-  const latRad = Math.atan(Math.sinh(Math.PI * (1 - (2 * y) / n)))
-  const lat = (latRad * 180) / Math.PI
-  return { lng, lat }
-}
-
 function decodeBase64ToArrayBuffer(b64: string) {
   const binary = atob(b64)
   const len = binary.length
@@ -57,59 +64,20 @@ function decodeBase64ToArrayBuffer(b64: string) {
   return bytes.buffer
 }
 
-type EcotwinViewState = MapViewState & {
-  pitch?: number
-  bearing?: number
-  transitionDuration?: number
-  transitionInterpolator?: unknown
+type SimpleViewState = {
+  longitude: number
+  latitude: number
+  zoom: number
+  bearing: number
+  pitch: number
 }
 
-const INITIAL_VIEW_STATE: EcotwinViewState = {
+const INITIAL_VIEW_STATE: SimpleViewState = {
   longitude: 19.0,
   latitude: 57.4,
   zoom: 5,
-  pitch: 0,
   bearing: 0,
-}
-
-type TileMarkerDatum = {
-  tile: Tile
-  lng: number
-  lat: number
-  label: string
-}
-
-type ZoomedTileLabelDatum = {
-  tile: Tile
-  lng: number
-  lat: number
-  label: string
-}
-
-type OutlineDatum = {
-  tile: Tile
-  polygon: [number, number][]
-}
-
-const biomassPalette = [
-  "#2563eb",
-  "#16a34a",
-  "#f59e0b",
-  "#ef4444",
-  "#a855f7",
-  "#14b8a6",
-  "#f97316",
-  "#0ea5e9",
-]
-
-function hexToRgb(hex: string) {
-  const m = /^#?([a-f\d]{2})([a-f\d]{2})([a-f\d]{2})$/i.exec(hex)
-  if (!m) return { r: 0, g: 0, b: 0 }
-  return {
-    r: Number.parseInt(m[1], 16),
-    g: Number.parseInt(m[2], 16),
-    b: Number.parseInt(m[3], 16),
-  }
+  pitch: 0,
 }
 
 function findFrameIndex(steps: number[], target: number) {
@@ -128,16 +96,14 @@ function findFrameIndex(steps: number[], target: number) {
   return Math.max(0, hi)
 }
 
-function formatTileLabel(name: string | undefined) {
-  const label = name?.trim() || "Untitled tile"
-  return label.length > 44 ? `${label.slice(0, 43)}…` : label
-}
-
 export function MapViewport() {
   const [mapError, setMapError] = useState<string | null>(null)
   const [mapLoaded, setMapLoaded] = useState(false)
-  const [viewState, setViewState] = useState<EcotwinViewState>(INITIAL_VIEW_STATE)
-  const [viewportSize, setViewportSize] = useState({ width: 1, height: 1 })
+  const [mapViewState, setMapViewState] = useState<SimpleViewState>(INITIAL_VIEW_STATE)
+  const [tooltip, setTooltip] = useState<{ x: number; y: number; text: string } | null>(null)
+
+  const biomassVisualization = useAtomValue(biomassVisualizationAtom)
+  const setBiomassVisualization = useSetAtom(biomassVisualizationAtom)
   const tiles = useAtomValue(tilesListAtom)
   const tileByIdCache = useAtomValue(tileByIdCacheAtom)
   const hoveredTileId = useAtomValue(hoveredTileIdAtom)
@@ -149,14 +115,14 @@ export function MapViewport() {
   const simulationStep = useAtomValue(simulationStepAtom)
 
   const token = mapboxToken || undefined
-  const viewportRef = useRef<HTMLDivElement | null>(null)
   const mapRef = useRef<MapRef | null>(null)
-  const biomassCanvasRef = useRef<HTMLCanvasElement | null>(null)
+
   const tileRouteMatch = useMatch("/tile/:tileId/*")
   const simulationRouteMatch = useMatch("/tile/:tileId/simulation/:simulationId")
   const routeTileId = tileRouteMatch?.params?.tileId
   const routeSimulationId = simulationRouteMatch?.params?.simulationId
   const isTileRoute = Boolean(tileRouteMatch)
+  const isSimulationRoute = Boolean(routeTileId && routeSimulationId)
   const lastRouteZoomedTileIdRef = useRef<string | null>(null)
 
   let webglSupported = true
@@ -165,21 +131,6 @@ export function MapViewport() {
   } catch {
     webglSupported = true
   }
-
-  useEffect(() => {
-    const el = viewportRef.current
-    if (!el) return
-    const ro = new ResizeObserver((entries) => {
-      const rect = entries[0]?.contentRect
-      if (!rect) return
-      setViewportSize({
-        width: Math.max(1, Math.round(rect.width)),
-        height: Math.max(1, Math.round(rect.height)),
-      })
-    })
-    ro.observe(el)
-    return () => ro.disconnect()
-  }, [])
 
   const tileMarkers = useMemo<TileMarkerDatum[]>(() => {
     if (!tiles?.items?.length) return []
@@ -230,20 +181,18 @@ export function MapViewport() {
 
     const topLeft = tileCornerLngLat(tile.x, tile.y, tile.zoom)
     const bottomRight = tileCornerLngLat(tile.x + 1, tile.y + 1, tile.zoom)
-    const topRight = { lng: bottomRight.lng, lat: topLeft.lat }
-    const bottomLeft = { lng: topLeft.lng, lat: bottomRight.lat }
 
-    const coordinates: mapboxgl.ImageSourceSpecification["coordinates"] = [
-      [topLeft.lng, topLeft.lat],
-      [topRight.lng, topRight.lat],
-      [bottomRight.lng, bottomRight.lat],
-      [bottomLeft.lng, bottomLeft.lat],
-    ]
+    const bounds: BiomassBounds = {
+      lngMin: topLeft.lng,
+      lngMax: bottomRight.lng,
+      latMin: bottomRight.lat,
+      latMax: topLeft.lat,
+    }
 
-    return { data, steps, h, w, s, coordinates }
+    return { data, steps, h, w, s, bounds }
   }, [getTileById, routeSimulationId, routeTileId, simulationResultByRecordId])
 
-  const biomassOverlay = useMemo(() => {
+  const biomassOverlay = useMemo<BiomassOverlayFrame | null>(() => {
     if (!biomassBase) return null
     const frame = findFrameIndex(
       biomassBase.steps,
@@ -251,64 +200,6 @@ export function MapViewport() {
     )
     return { ...biomassBase, frame }
   }, [biomassBase, simulationStep])
-
-  useEffect(() => {
-    if (!biomassOverlay) return
-    const canvas = biomassCanvasRef.current
-    if (!canvas) return
-    const ctx = canvas.getContext("2d")
-    if (!ctx) return
-
-    const { data, frame, h, w, s } = biomassOverlay
-
-    canvas.width = w
-    canvas.height = h
-
-    const pixels = new Uint8ClampedArray(w * h * 4)
-
-    const frameOffset = frame * h * w * s
-    let maxV = 0
-    for (let i = 0; i < h * w * s; i++) {
-      const v = data[frameOffset + i] ?? 0
-      if (v > maxV) maxV = v
-    }
-    if (maxV <= 0) maxV = 1
-
-    for (let y = 0; y < h; y++) {
-      for (let x = 0; x < w; x++) {
-        // Data orientation fix:
-        // The upstream biomass grid axes don't match our tile orientation.
-        // Rotate 90° left and flip vertically (for square grids this is equivalent to transpose).
-        const dataX = y
-        const dataY = x
-        const cellBase = frameOffset + (dataY * w + dataX) * s
-        let bestSp = 0
-        let bestV = -Infinity
-        for (let sp = 0; sp < s; sp++) {
-          const v = data[cellBase + sp] ?? 0
-          if (v > bestV) {
-            bestV = v
-            bestSp = sp
-          }
-        }
-
-        const rgb = hexToRgb(biomassPalette[bestSp % biomassPalette.length]!)
-        const t = Math.max(0, Math.min(1, bestV / maxV))
-        const r = Math.round(255 * (1 - t) + rgb.r * t)
-        const g = Math.round(255 * (1 - t) + rgb.g * t)
-        const b = Math.round(255 * (1 - t) + rgb.b * t)
-
-        const p = (y * w + x) * 4
-        pixels[p + 0] = r
-        pixels[p + 1] = g
-        pixels[p + 2] = b
-        pixels[p + 3] = 255
-      }
-    }
-
-    ctx.putImageData(new ImageData(pixels, w, h), 0, 0)
-    mapRef.current?.getMap?.().triggerRepaint()
-  }, [biomassOverlay])
 
   useEffect(() => {
     if (!routeTileId) {
@@ -322,36 +213,44 @@ export function MapViewport() {
     const tile = getTileById(routeTileId)
     if (!tile) return
 
-    const map = mapRef.current?.getMap?.()
-    const canvas = map?.getCanvas?.()
-    const width = canvas?.clientWidth ?? 0
-    const height = canvas?.clientHeight ?? 0
-    if (!width || !height) return
+    const mapRefValue = mapRef.current
+    if (!mapRefValue) return
+    const map = mapRefValue.getMap?.()
+    if (!map) return
 
+    let canceled = false
     const topLeft = tileCornerLngLat(tile.x, tile.y, tile.zoom)
     const bottomRight = tileCornerLngLat(tile.x + 1, tile.y + 1, tile.zoom)
-    const bounds: [[number, number], [number, number]] = [
+    const bounds: mapboxgl.LngLatBoundsLike = [
       [topLeft.lng, bottomRight.lat],
       [bottomRight.lng, topLeft.lat],
     ]
 
-    const fit = new WebMercatorViewport({ width, height }).fitBounds(bounds, {
-      padding: 80,
-    })
+    const attemptZoom = () => {
+      if (canceled) return
+      if (lastRouteZoomedTileIdRef.current === routeTileId) return
+      try {
+        if (!map.isStyleLoaded?.() || !map.loaded?.()) return
+        mapRefValue.fitBounds(bounds, {
+          padding: 80,
+          duration: 800,
+        })
+        lastRouteZoomedTileIdRef.current = routeTileId
+      } catch (err) {
+        const message = err instanceof Error ? err.message : String(err)
+        if (!message.toLowerCase().includes("style is not done loading")) {
+          console.error(err)
+        }
+      }
+    }
 
-    const raf = window.requestAnimationFrame(() => {
-      setViewState((prev) => ({
-        ...prev,
-        longitude: fit.longitude,
-        latitude: fit.latitude,
-        zoom: fit.zoom,
-        transitionDuration: 800,
-        transitionInterpolator: new FlyToInterpolator(),
-      }))
-      lastRouteZoomedTileIdRef.current = routeTileId
-    })
+    map.on("idle", attemptZoom)
+    attemptZoom()
 
-    return () => window.cancelAnimationFrame(raf)
+    return () => {
+      canceled = true
+      map.off("idle", attemptZoom)
+    }
   }, [getTileById, mapLoaded, routeTileId])
 
   const hoveredImageOverlaySource = useMemo(() => {
@@ -405,176 +304,170 @@ export function MapViewport() {
     const tile = getTileById(routeTileId)
     if (!tile) return null
     const topLeft = tileCornerLngLat(tile.x, tile.y, tile.zoom)
-    return { tile, lng: topLeft.lng, lat: topLeft.lat, label: formatTileLabel(tile.name) }
+    return {
+      tile,
+      lng: topLeft.lng,
+      lat: topLeft.lat,
+      label: formatTileLabel(tile.name),
+    }
   }, [getTileById, isTileRoute, routeTileId])
 
-  const deckLayers = useMemo(() => {
+  const deckLayers = useMemo<LayersList>(() => {
     const layers: LayersList = []
 
-    if (activeOutlinePolygon) {
+    const biomassLayer =
+      biomassVisualization === "h3Hexagon"
+        ? createBiomassH3HexagonLayer(biomassOverlay, mapViewState.zoom)
+        : createBiomassScreenGridLayer(biomassOverlay)
+    if (biomassLayer) {
       layers.push(
-        new PolygonLayer<OutlineDatum>({
-          id: "hovered-tile-outline",
-          data: [activeOutlinePolygon],
-          getPolygon: (d) => d.polygon,
-          filled: false,
-          stroked: true,
-          getLineColor: [17, 24, 39, Math.round(255 * 0.65)],
-          getLineWidth: 2,
-          lineWidthUnits: "pixels",
-        })
-      )
-    }
-
-    layers.push(
-      new ScatterplotLayer<TileMarkerDatum>({
-        id: "tile-hit-area",
-        data: visibleTileMarkers,
-        pickable: true,
-        radiusUnits: "pixels",
-        getPosition: (d) => [d.lng, d.lat],
-        getRadius: 42,
-        getFillColor: [0, 0, 0, 0],
-        onHover: (info) => {
-          const id = (info.object as TileMarkerDatum | undefined)?.tile.id ?? null
-          setHoveredTileId(id)
-        },
-        onClick: (info) => {
-          const id = (info.object as TileMarkerDatum | undefined)?.tile.id
-          if (id) setSelectedTileId(id)
-        },
-      })
-    )
-
-    layers.push(
-      new ScatterplotLayer<TileMarkerDatum>({
-        id: "tile-dots",
-        data: visibleTileMarkers,
-        pickable: false,
-        radiusUnits: "pixels",
-        stroked: true,
-        getPosition: (d) => [d.lng, d.lat],
-        getRadius: (d) =>
-          d.tile.id === hoveredTileId || d.tile.id === selectedTileId ? 7 : 5,
-        getFillColor: [24, 24, 27, 255],
-        getLineColor: [255, 255, 255, 255],
-        lineWidthUnits: "pixels",
-        getLineWidth: (d) =>
-          d.tile.id === hoveredTileId || d.tile.id === selectedTileId ? 2 : 2,
-        updateTriggers: {
-          getRadius: [hoveredTileId, selectedTileId],
-          getLineWidth: [hoveredTileId, selectedTileId],
-        },
-      })
-    )
-
-    layers.push(
-      new TextLayer<TileMarkerDatum>({
-        id: "tile-labels",
-        data: visibleTileMarkers,
-        pickable: false,
-        sizeUnits: "pixels",
-        sizeScale: 1,
-        getPosition: (d) => [d.lng, d.lat],
-        getText: (d) => d.label,
-        getSize: 11,
-        getColor: [24, 24, 27, 255],
-        getTextAnchor: "middle",
-        getAlignmentBaseline: "bottom",
-        getPixelOffset: [0, -14],
-        background: true,
-        getBackgroundColor: (d) =>
-          d.tile.id === hoveredTileId || d.tile.id === selectedTileId
-            ? [255, 255, 255, 255]
-            : [255, 255, 255, Math.round(255 * 0.95)],
-        backgroundPadding: [8, 4, 8, 4],
-        backgroundBorderRadius: 6,
-        getBorderColor: [0, 0, 0, Math.round(255 * 0.1)],
-        getBorderWidth: 1,
-        updateTriggers: {
-          getBackgroundColor: [hoveredTileId, selectedTileId],
-        },
-      })
-    )
-
-    if (zoomedTileLabel) {
-      layers.push(
-        new TextLayer<ZoomedTileLabelDatum>({
-          id: "zoomed-tile-label",
-          data: [zoomedTileLabel],
-          pickable: false,
-          sizeUnits: "pixels",
-          sizeScale: 1,
-          getPosition: (d) => [d.lng, d.lat],
-          getText: (d) => d.label,
-          getSize: 11,
-          getColor: [24, 24, 27, 255],
-          getTextAnchor: "start",
-          getAlignmentBaseline: "top",
-          getPixelOffset: [8, 8],
-          background: true,
-          getBackgroundColor: [255, 255, 255, 255],
-          backgroundPadding: [8, 4, 8, 4],
-          backgroundBorderRadius: 6,
-          getBorderColor: [0, 0, 0, Math.round(255 * 0.1)],
-          getBorderWidth: 1,
+        biomassLayer.clone({
+          // @ts-expect-error MapboxOverlay supports `beforeId` (used when interleaved: true)
+          beforeId: TILE_HIT_AREA_LAYER_ID,
         })
       )
     }
 
     return layers
   }, [
-    activeOutlinePolygon,
-    hoveredTileId,
-    selectedTileId,
-    setHoveredTileId,
-    setSelectedTileId,
-    visibleTileMarkers,
-    zoomedTileLabel,
+    biomassOverlay,
+    biomassVisualization,
+    mapViewState.zoom,
   ])
 
+  const getTooltipText = useCallback((info: PickingInfo) => {
+    if (info.layer?.id === "biomass-screen-grid") {
+      const obj = info.object as { value?: number; count?: number } | null
+      const v = obj?.value
+      const c = obj?.count
+      if (typeof v !== "number") return null
+      const countLabel = typeof c === "number" ? ` (${c})` : ""
+      return `Biomass: ${v.toFixed(2)}${countLabel}`
+    }
+
+    if (info.layer?.id === "biomass-h3-hex") {
+      const obj = info.object as BiomassHexDatum | null
+      if (!obj) return null
+      return `${obj.hex} biomass: ${obj.count.toFixed(2)}`
+    }
+
+    return null
+  }, [])
+
+  const onDeckHover = useCallback(
+    (info: PickingInfo) => {
+      const text = getTooltipText(info)
+      if (!text) {
+        setTooltip(null)
+        return
+      }
+      if (typeof info.x !== "number" || typeof info.y !== "number") {
+        setTooltip(null)
+        return
+      }
+      setTooltip({ x: info.x, y: info.y, text })
+    },
+    [getTooltipText]
+  )
+
+  const overlayProps = useMemo(
+    () => ({
+      interleaved: true,
+      layers: deckLayers,
+      onHover: onDeckHover,
+    }),
+    [deckLayers, onDeckHover]
+  )
+
+  useEffect(() => {
+    if (!isSimulationRoute) return
+    if (!mapLoaded) return
+
+    const map = mapRef.current?.getMap?.()
+    if (!map) return
+
+    const targetPitch = biomassVisualization === "h3Hexagon" ? 55 : 0
+    const currentPitch = map.getPitch?.() ?? 0
+    if (Math.abs(currentPitch - targetPitch) < 0.5) return
+
+    map.easeTo({
+      pitch: targetPitch,
+      duration: 900,
+      easing: (t) => t * t * (3 - 2 * t),
+    })
+  }, [biomassVisualization, isSimulationRoute, mapLoaded])
+
+  const onBiomassVisualizationChange = useCallback(
+    (value: string) => {
+      if (value === "screenGrid" || value === "h3Hexagon") {
+        setBiomassVisualization(value)
+      }
+    },
+    [setBiomassVisualization]
+  )
+
+  const onMove = useCallback((evt: ViewStateChangeEvent) => {
+    const vs = evt.viewState
+    setMapViewState({
+      longitude: vs.longitude,
+      latitude: vs.latitude,
+      zoom: vs.zoom,
+      bearing: vs.bearing,
+      pitch: vs.pitch,
+    })
+  }, [])
+
+  const onTileMouseMove = useCallback(
+    (evt: MapLayerMouseEvent) => {
+      const f = evt.features?.[0]
+      const id = f?.properties?.tileId
+      setHoveredTileId(typeof id === "string" ? id : null)
+    },
+    [setHoveredTileId]
+  )
+
+  const onTileClick = useCallback(
+    (evt: MapLayerMouseEvent) => {
+      const f = evt.features?.[0]
+      const id = f?.properties?.tileId
+      if (typeof id === "string") setSelectedTileId(id)
+    },
+    [setSelectedTileId]
+  )
+
   return (
-    <div ref={viewportRef} className="absolute inset-0">
+    <div className="absolute inset-0">
       {webglSupported ? (
-        <DeckGL
-          viewState={viewState}
-          onViewStateChange={({ viewState: next }) => setViewState(next as EcotwinViewState)}
-          controller={!isTileRoute}
-          layers={deckLayers}
-          style={{ width: "100%", height: "100%" }}
-        >
+        <>
           <Map
             ref={mapRef}
             mapboxAccessToken={token}
             mapLib={mapboxgl}
-            interactive={false}
-            viewState={{
-              width: viewportSize.width,
-              height: viewportSize.height,
-              longitude: viewState.longitude,
-              latitude: viewState.latitude,
-              zoom: viewState.zoom,
-              bearing: viewState.bearing ?? 0,
-              pitch: viewState.pitch ?? 0,
-              padding: { top: 0, bottom: 0, left: 0, right: 0 },
-            }}
+            projection={{ name: "globe" }}
+            initialViewState={INITIAL_VIEW_STATE}
+            onMove={onMove}
+            onMouseMove={onTileMouseMove}
+            onClick={onTileClick}
+            interactiveLayerIds={[TILE_HIT_AREA_LAYER_ID, TILE_DOTS_LAYER_ID]}
+            scrollZoom={!isTileRoute}
+            dragPan={!isTileRoute}
+            dragRotate={!isTileRoute}
+            doubleClickZoom={!isTileRoute}
+            touchZoomRotate={!isTileRoute}
+            keyboard={!isTileRoute}
+            cursor={
+              hoveredTileId ? "pointer" : isTileRoute ? "default" : "grab"
+            }
             mapStyle="mapbox://styles/sebastianait/cmj9rorhf004b01s9fj9m1ynh"
             attributionControl={false}
             style={{ width: "100%", height: "100%" }}
             onLoad={() => setMapLoaded(true)}
             onError={(e: ErrorEvent) => {
-              const message =
-                e.error?.message ?? "Map error (check console for details)"
+              const message = e.error?.message ?? "Map error (check console for details)"
               setMapError(message)
               console.error(e.error ?? e)
             }}
           >
-            <canvas
-              id="biomass-canvas"
-              ref={biomassCanvasRef}
-              className="pointer-events-none absolute -left-[9999px] -top-[9999px] opacity-0"
-            />
-
             {hoveredImageOverlaySource ? (
               <Source
                 id="hovered-tile-image"
@@ -593,27 +486,61 @@ export function MapViewport() {
               </Source>
             ) : null}
 
-            {biomassOverlay ? (
-              <Source
-                id="biomass-overlay"
-                type="canvas"
-                canvas="biomass-canvas"
-                coordinates={biomassOverlay.coordinates}
-              >
-                <Layer
-                  id="biomass-overlay-layer"
-                  type="raster"
-                  paint={{
-                    "raster-opacity": 0.75,
-                    "raster-resampling": "nearest",
-                  }}
-                />
-              </Source>
+            <MapboxTileOverlays
+              visibleTileMarkers={visibleTileMarkers}
+              hoveredTileId={hoveredTileId}
+              selectedTileId={selectedTileId}
+              activeOutlinePolygon={activeOutlinePolygon}
+              zoomedTileLabel={zoomedTileLabel}
+            />
+
+            <MapboxDeckOverlay
+              key={overlayProps.interleaved ? "deck-interleaved" : "deck-overlaid"}
+              {...overlayProps}
+            />
+
+            {!isTileRoute ? (
+              <NavigationControl position="bottom-right" showCompass={false} />
             ) : null}
           </Map>
 
-          {!isTileRoute ? <ZoomWidget /> : null}
-        </DeckGL>
+          {tooltip ? (
+            <div
+              className="pointer-events-none absolute z-30 rounded-md bg-zinc-900/95 px-2 py-1 text-[11px] font-medium text-white shadow-sm"
+              style={{
+                left: tooltip.x + 12,
+                top: tooltip.y + 12,
+                maxWidth: "min(360px, 90vw)",
+              }}
+            >
+              {tooltip.text}
+            </div>
+          ) : null}
+
+          {isSimulationRoute ? (
+            <div className="pointer-events-auto absolute left-4 top-4 z-20 rounded-md bg-white/90 px-3 py-2 shadow-sm ring-1 ring-black/10 backdrop-blur">
+              <div className="text-[11px] font-semibold text-zinc-900">
+                Biomass visualization
+              </div>
+              <div className="mt-1">
+                <Select
+                  value={biomassVisualization}
+                  onValueChange={onBiomassVisualizationChange}
+                >
+                  <SelectTrigger size="sm" className="w-44">
+                    <SelectValue placeholder="Select view" />
+                  </SelectTrigger>
+                  <SelectContent position="popper" align="start">
+                    <SelectGroup>
+                      <SelectItem value="screenGrid">Screen grid</SelectItem>
+                      <SelectItem value="h3Hexagon">Hexagons</SelectItem>
+                    </SelectGroup>
+                  </SelectContent>
+                </Select>
+              </div>
+            </div>
+          ) : null}
+        </>
       ) : (
         <div className="grid h-full w-full place-items-center bg-white text-sm text-zinc-700">
           WebGL not available, map cannot render.
