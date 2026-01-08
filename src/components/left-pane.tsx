@@ -6,8 +6,8 @@ type LeftPaneProps = {
 
 export function LeftPane({ children }: LeftPaneProps) {
   return (
-    <aside className="absolute bottom-6 left-6 top-6 z-10 w-72 overflow-hidden bg-zinc-300 shadow-sm">
-      <div className="h-full overflow-auto p-4">{children}</div>
+    <aside className="absolute z-30 w-80 flex flex-col gap-pane bottom-pane left-pane top-[calc(var(--spacing-pane)*2+3.5rem)]">
+      {children}
     </aside>
   )
 }

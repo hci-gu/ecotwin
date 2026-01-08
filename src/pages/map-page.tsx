@@ -1,4 +1,5 @@
 import { LeftPane } from "@/components/left-pane"
+import { TileList } from "@/components/tile-list"
 import { RightPane } from "@/components/right-pane"
 import { fileUrl } from "@/state/ecotwin-api"
 import {
@@ -12,6 +13,11 @@ import { useEcotwinState } from "@/state/use-ecotwin-state"
 import { useAtomValue, useSetAtom } from "jotai"
 import { useEffect, useMemo } from "react"
 import { useNavigate } from "react-router-dom"
+import { GlassPane } from "@/components/glass-pane"
+import { ActionsPane } from "@/components/actions-pane"
+import { TileDetails } from "@/components/tile-details"
+import { HugeiconsIcon } from "@hugeicons/react"
+import { ArrowDown01Icon } from "@hugeicons/core-free-icons"
 
 function isPreviewableImage(filename: string) {
   const lower = filename.toLowerCase()
@@ -30,14 +36,9 @@ function isPreviewableImage(filename: string) {
 export function MapPage() {
   const navigate = useNavigate()
   const {
-    hoveredTileId,
-    setHoveredTileId,
     selectedTileId,
     setSelectedTileId,
     tiles,
-    tilesLoading,
-    tilesError,
-    refreshTiles,
   } = useEcotwinState()
 
   const selectedTile = tiles?.items.find((t) => t.id === selectedTileId)
@@ -96,316 +97,132 @@ export function MapPage() {
 
   return (
     <>
-      <LeftPane>
-        <div className="flex items-center justify-between gap-3">
-          <h2 className="text-sm font-semibold text-zinc-900">Tiles</h2>
-          <button
-            type="button"
-            onClick={() => void refreshTiles()}
-            className="cursor-pointer rounded-md bg-white/70 px-2 py-1 text-xs text-zinc-800 hover:bg-white"
-          >
-            Refresh
-          </button>
-        </div>
-
-        {tiles ? (
-          <div className="mt-1 text-xs text-zinc-700">
-            Showing {tiles.items.length} of {tiles.totalItems}
-          </div>
-        ) : null}
-
-        {tilesError ? (
-          <div className="mt-3 rounded-md bg-white/80 p-2 text-xs text-zinc-900">
-            {tilesError.message}
-          </div>
-        ) : null}
-
-        {tilesLoading && !tiles ? (
-          <div className="mt-3 text-sm text-zinc-800">Loading…</div>
-        ) : null}
-
-        <ul className="mt-3 space-y-2">
-          {tiles?.items.map((tile) => {
-            const image = fileUrl(tile, tile.satellite)
-            const isActive =
-              hoveredTileId === tile.id || selectedTileId === tile.id
-            return (
-              <li
-                key={tile.id}
-                onClick={() => {
-                  setSelectedTileId(tile.id)
-                }}
-                onMouseEnter={() => setHoveredTileId(tile.id)}
-                onMouseLeave={() => {
-                  if (hoveredTileId === tile.id) setHoveredTileId(null)
-                }}
-                className={[
-                  "flex cursor-pointer items-center gap-3 rounded-md p-2 transition-colors",
-                  isActive
-                    ? "bg-white ring-2 ring-zinc-900/20"
-                    : "bg-white/70 hover:bg-white",
-                ].join(" ")}
-              >
-                <div className="h-10 w-10 flex-none overflow-hidden rounded bg-zinc-200">
-                  {image ? (
-                    <img
-                      src={image}
-                      alt={
-                        tile.name
-                          ? `Tile ${tile.name}`
-                          : `Tile ${tile.zoom}/${tile.x}/${tile.y}`
-                      }
-                      className="h-full w-full cursor-pointer object-cover"
-                      loading="lazy"
-                      onMouseEnter={() =>
-                        setHoveredTileImageOverlay({
-                          tileId: tile.id,
-                          url: image,
-                          resampling: "linear",
-                          opacity: 0.75,
-                        })
-                      }
-                      onMouseLeave={clearOverlay}
-                    />
-                  ) : null}
-                </div>
-                <div className="min-w-0">
-                  <div className="truncate text-xs font-medium text-zinc-900">
-                    {tile.name || "Untitled tile"}
-                  </div>
-                  <div className="truncate text-[11px] text-zinc-700">
-                    {tile.zoom}/{tile.x}/{tile.y} · id: {tile.id}
-                  </div>
-                </div>
-              </li>
-            )
-          })}
-        </ul>
-      </LeftPane>
+        <LeftPane>
+          <GlassPane className="flex flex-col overflow-auto [scrollbar-gutter:stable]">
+            <TileList selectedTileId={selectedTileId} />
+          </GlassPane>
+          {selectedTileId && <ActionsPane className="animate-in slide-in-from-left-4 fade-in duration-300 shrink-0" />}
+        </LeftPane>
 
       {selectedTileId ? (
-        <RightPane>
-          <div className="flex items-start justify-between gap-3">
-            <div className="min-w-0">
-              <div className="truncate text-sm font-semibold text-zinc-900">
-                {selectedTile?.name || "Selected tile"}
-              </div>
-              <div className="mt-1 text-xs text-zinc-700">
-                {selectedTile
-                  ? `${selectedTile.zoom}/${selectedTile.x}/${selectedTile.y}`
-                  : selectedTileId}
-              </div>
+        <RightPane className="animate-in slide-in-from-right-4 fade-in duration-300">
+          <div className="flex flex-col gap-6">
+            <div className="flex items-center justify-between pb-2">
+              <button
+                type="button"
+                onClick={() => setSelectedTileId(null)}
+                className="text-xs font-medium text-zinc-500 hover:text-zinc-900 flex items-center gap-1 cursor-pointer"
+              >
+                <HugeiconsIcon icon={ArrowDown01Icon} size={14} className="-rotate-90" />
+                Close details
+              </button>
+              {selectedTile && (
+                <button
+                  type="button"
+                  onClick={() => navigate(`/tile/${selectedTile.id}`)}
+                  className="inline-flex cursor-pointer items-center rounded-md bg-zinc-900 px-3 py-1.5 text-[11px] font-medium text-white shadow-sm hover:bg-zinc-800 transition-colors"
+                >
+                  Configure tile
+                </button>
+              )}
             </div>
-            <button
-              type="button"
-              onClick={() => {
-                setSelectedTileId(null)
-              }}
-              className="cursor-pointer rounded-md bg-white px-2 py-1 text-xs text-zinc-800 hover:bg-zinc-50"
-            >
-              Close
-            </button>
-          </div>
 
-	          {selectedTile ? (
-	            <>
-	              <div className="mt-4 space-y-2 text-xs text-zinc-800">
-	                <div>
-	                  <span className="text-zinc-600">id:</span> {selectedTile.id}
-	                </div>
-	                <div>
-	                  <span className="text-zinc-600">x/y/zoom:</span>{" "}
-	                  {selectedTile.x}/{selectedTile.y}/{selectedTile.zoom}
-	                </div>
-	              </div>
-
-	              <div className="mt-6 border-t border-zinc-200 pt-4">
-	                <button
-	                  type="button"
-	                  onClick={() => navigate(`/tile/${selectedTile.id}`)}
-	                  className="inline-flex cursor-pointer items-center rounded-md bg-zinc-900 px-2 py-1 text-[11px] font-medium text-white shadow-sm"
-	                >
-	                  Select tile
-	                </button>
-	              </div>
-	            </>
-	          ) : (
-	            <div className="mt-4 text-sm text-zinc-800">
-	              Tile details not loaded.
-            </div>
-          )}
-
-          <div className="mt-6 border-t border-zinc-200 pt-4">
-            <div className="text-xs font-semibold text-zinc-900">
-              Landcover
-            </div>
-            {!selectedTile?.landcover ? (
-              <div className="mt-2 text-sm text-zinc-700">
-                No landcover linked to this tile.
-              </div>
-	            ) : selectedLandcover ? (
-	              <>
-	                <div className="mt-2 aspect-square overflow-hidden rounded-md bg-white shadow-sm ring-1 ring-black/10">
-	                  {selectedLandcover.color_100 ||
-	                  selectedLandcover.color ||
-	                  selectedLandcover.texture_100 ||
-	                  selectedLandcover.texture ? (
-                    <img
-                      src={
-                        fileUrl(
-                          selectedLandcover,
-                          selectedLandcover.color_100 ||
-                            selectedLandcover.color ||
-                            selectedLandcover.texture_100 ||
-                            selectedLandcover.texture
-                        ) ?? ""
-                      }
-                      alt="Landcover"
-                      className="h-full w-full object-cover"
-                      style={{ imageRendering: "pixelated" }}
-                      loading="lazy"
-                      onMouseEnter={() => {
-                        const filename =
-                          selectedLandcover.color_100 ||
-                          selectedLandcover.color ||
-                          selectedLandcover.texture_100 ||
-                          selectedLandcover.texture
-                        const url = fileUrl(selectedLandcover, filename)
-                        if (!url) return
-                        setHoveredTileImageOverlay({
-                          tileId: selectedTile.id,
-                          url,
-                          resampling: "nearest",
-                          opacity: 0.85,
-                        })
-                      }}
-                      onMouseLeave={clearOverlay}
-                    />
-                  ) : (
-                    <div className="grid h-full place-items-center text-sm text-zinc-600">
-                      No landcover image
-                    </div>
-	                  )}
-	                </div>
-
-                {coverageEntries ? (
-                  <div className="mt-4">
-                    <div className="text-xs text-zinc-600">Coverage</div>
-                    <div className="mt-2 space-y-1 text-xs text-zinc-800">
-                      {coverageEntries.map((entry) => (
-                        <div
-                          key={entry.key}
-                          className="flex items-baseline justify-between gap-3"
-                        >
-                          <div className="min-w-0 truncate text-zinc-700">
-                            {entry.key}
-	                          </div>
-	                          <div className="flex-none font-medium text-zinc-900">
-	                            {entry.num !== null
-	                              ? `${new Intl.NumberFormat(undefined, {
-	                                  maximumFractionDigits: 1,
-	                                }).format(entry.num)}%`
-	                              : String(entry.value)}
-	                          </div>
-	                        </div>
-	                      ))}
-                    </div>
-                  </div>
-                ) : selectedLandcover.coverage ? (
-                  <div className="mt-4 text-xs text-zinc-700">
-                    Coverage: {JSON.stringify(selectedLandcover.coverage)}
-                  </div>
-                ) : (
-                  <div className="mt-4 text-sm text-zinc-700">
-                    No coverage data.
-                  </div>
-                )}
-              </>
-            ) : (
-              <div className="mt-2 text-sm text-zinc-700">
-                Loading landcover…
-              </div>
-            )}
-          </div>
-
-          <div className="mt-6 border-t border-zinc-200 pt-4">
-            <div className="text-xs font-semibold text-zinc-900">
-              Ocean data
-            </div>
-            {!selectedTile?.oceanData ? (
-              <div className="mt-2 text-sm text-zinc-700">
-                No ocean data linked to this tile.
-              </div>
-            ) : selectedOceanData ? (
-              <div className="mt-3 space-y-3">
-                {(
-                  [
-                    ["depth", selectedOceanData.depth] as const,
-                    ["surface_elevation", selectedOceanData.surface_elevation] as const,
-                    ["water_temperature", selectedOceanData.water_temperature] as const,
-                    ["water_velocity", selectedOceanData.water_velocity] as const,
-                  ] as const
-                ).map(([label, filename]) => {
-                  if (!filename) return null
-                  const url = fileUrl(selectedOceanData, filename)
-                  const canPreview = isPreviewableImage(filename)
-                  return (
-                    <div
-                      key={label}
-                      className="rounded-md bg-white/70 p-2 ring-1 ring-black/5"
-                    >
-                      <div className="text-[11px] font-medium text-zinc-800">
-                        {label}
+            <TileDetails 
+              name={selectedTile?.name || "Untitled tile"} 
+              status="Ready to run"
+              createdDate={selectedTile?.created?.substring(0, 10) || "2025-12-12"}
+              landcoverContent={
+                <div>
+                  {!selectedTile?.landcover ? (
+                    <div className="text-xs text-zinc-500 italic">No landcover linked</div>
+                  ) : selectedLandcover ? (
+                    <div className="space-y-4">
+                      <div className="aspect-square overflow-hidden rounded-md bg-white shadow-sm ring-1 ring-black/5">
+                        {selectedLandcover.color_100 ||
+                        selectedLandcover.color ||
+                        selectedLandcover.texture_100 ||
+                        selectedLandcover.texture ? (
+                          <img
+                            src={fileUrl(selectedLandcover, selectedLandcover.color_100 || selectedLandcover.color || selectedLandcover.texture_100 || selectedLandcover.texture) ?? ""}
+                            alt="Landcover"
+                            className="h-full w-full object-cover"
+                            style={{ imageRendering: "pixelated" }}
+                            onMouseEnter={() => {
+                              const filename = selectedLandcover.color_100 || selectedLandcover.color || selectedLandcover.texture_100 || selectedLandcover.texture
+                              const url = fileUrl(selectedLandcover, filename)
+                              if (!url) return
+                              setHoveredTileImageOverlay({ tileId: selectedTile.id, url, resampling: "nearest", opacity: 0.85 })
+                            }}
+                            onMouseLeave={clearOverlay}
+                          />
+                        ) : (
+                          <div className="grid h-full place-items-center text-xs text-zinc-400">No image</div>
+                        )}
                       </div>
-                      <div className="mt-2 flex items-center gap-3">
-                        <div className="aspect-square w-16 overflow-hidden rounded bg-zinc-200">
-                          {url && canPreview ? (
-                            <img
-                              src={url}
-                              alt={label}
-                              className="h-full w-full object-cover"
-                              loading="lazy"
-                              onMouseEnter={() =>
-                                setHoveredTileImageOverlay({
-                                  tileId: selectedTile.id,
-                                  url,
-                                  resampling: "nearest",
-                                  opacity: 0.85,
-                                })
-                              }
-                              onMouseLeave={clearOverlay}
-                            />
-                          ) : (
-                            <div className="grid h-full w-full place-items-center text-[10px] text-zinc-600">
-                              File
-                            </div>
-                          )}
-                        </div>
-                        <div className="min-w-0">
-                          <div className="truncate text-xs text-zinc-700">
-                            {filename}
+                      {coverageEntries && (
+                        <div className="space-y-2">
+                          <div className="text-[10px] font-bold text-zinc-400 uppercase tracking-wider">Coverage</div>
+                          <div className="space-y-1.5">
+                            {coverageEntries.map((entry) => (
+                              <div key={entry.key} className="flex items-center justify-between gap-2">
+                                <span className="truncate text-[11px] text-zinc-600">{entry.key}</span>
+                                <span className="shrink-0 text-[11px] font-semibold text-zinc-900">
+                                  {entry.num !== null ? `${entry.num.toFixed(1)}%` : String(entry.value)}
+                                </span>
+                              </div>
+                            ))}
                           </div>
-                          {url ? (
-                            <a
-                              href={url}
-                              target="_blank"
-                              rel="noreferrer"
-                              className="mt-1 inline-block text-xs font-medium text-zinc-900 underline underline-offset-2"
-                            >
-                              Open
-                            </a>
-                          ) : null}
                         </div>
-                      </div>
+                      )}
                     </div>
-                  )
-                })}
-              </div>
-            ) : (
-              <div className="mt-2 text-sm text-zinc-700">
-                Loading ocean data…
-              </div>
-            )}
+                  ) : (
+                    <div className="text-xs text-zinc-500 animate-pulse">Loading landcover…</div>
+                  )}
+                </div>
+              }
+              oceanDataContent={
+                <div>
+                  {!selectedTile?.oceanData ? (
+                    <div className="text-xs text-zinc-500 italic">No ocean data linked</div>
+                  ) : selectedOceanData ? (
+                    <div className="grid grid-cols-2 gap-2">
+                      {(
+                        [
+                          ["depth", selectedOceanData.depth] as const,
+                          ["elevation", selectedOceanData.surface_elevation] as const,
+                          ["temp", selectedOceanData.water_temperature] as const,
+                          ["velocity", selectedOceanData.water_velocity] as const,
+                        ] as const
+                      ).map(([label, filename]) => {
+                        if (!filename) return null
+                        const url = fileUrl(selectedOceanData, filename)
+                        const canPreview = isPreviewableImage(filename)
+                        return (
+                          <div key={label} className="rounded-md bg-white/50 p-2 ring-1 ring-black/5 hover:bg-white/80 transition-colors">
+                            <div className="text-[10px] font-bold text-zinc-400 uppercase tracking-wider">{label}</div>
+                            <div className="mt-2 aspect-square rounded overflow-hidden bg-zinc-100">
+                              {url && canPreview ? (
+                                <img
+                                  src={url}
+                                  alt={label}
+                                  className="h-full w-full object-cover"
+                                  onMouseEnter={() => setHoveredTileImageOverlay({ tileId: selectedTile.id, url, resampling: "nearest", opacity: 0.85 })}
+                                  onMouseLeave={clearOverlay}
+                                />
+                              ) : (
+                                <div className="grid h-full place-items-center text-[9px] text-zinc-400">FILE</div>
+                              )}
+                            </div>
+                          </div>
+                        )
+                      })}
+                    </div>
+                  ) : (
+                    <div className="text-xs text-zinc-500 animate-pulse">Loading ocean data…</div>
+                  )}
+                </div>
+              }
+            />
           </div>
         </RightPane>
       ) : null}

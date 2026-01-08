@@ -1,12 +1,13 @@
 import { LeftPane } from "@/components/left-pane"
+import { GlassPane } from "@/components/glass-pane"
+import { ActionsPane } from "@/components/actions-pane"
+import { TileList } from "@/components/tile-list"
+import { TileDetails } from "@/components/tile-details"
 import { RightPane } from "@/components/right-pane"
 import { BiomassChart } from "@/components/biomass-chart"
 import { BottomPane } from "@/components/bottom-pane"
 import { SimulationTimeline } from "@/components/simulation-timeline"
-import { cn } from "@/lib/utils"
 import {
-  createManagementPlan,
-  createSimulation,
   deleteSimulation,
   fileUrl,
   getTile,
@@ -24,43 +25,25 @@ import {
   landcoversByIdAtom,
   managementPlansAtom,
   managementPlanByIdCacheAtom,
-  managementPlanByIdErrorAtom,
-  managementPlanByIdLoadingAtom,
   oceanDataByIdAtom,
   selectedTileIdAtom,
   simulationByIdCacheAtom,
-  simulationByIdErrorAtom,
-  simulationByIdLoadingAtom,
-  simulationResultByRecordIdAtom,
-  simulationResultErrorAtom,
-  simulationResultLoadingAtom,
-  simAgentsAtom,
-  simAgentsErrorAtom,
-  simAgentsLoadingAtom,
-  refreshSimAgentsAtom,
   simulationsAtom,
   tileByIdCacheAtom,
-  tileByIdErrorAtom,
-  tileByIdLoadingAtom,
+  managementPlanByIdLoadingAtom,
+  simulationResultLoadingAtom,
+  simulationResultByRecordIdAtom,
   tilesListAtom,
 } from "@/state/ecotwin-atoms"
 import { useAtomValue, useSetAtom } from "jotai"
-import { useEffect, useMemo, useRef, useState } from "react"
+import { useEffect, useMemo, useState } from "react"
 import {
-  Link,
   useMatch,
   useNavigate,
   useParams,
-  useSearchParams,
 } from "react-router-dom"
-import type {
-  ManagementPlan,
-  SimAgent,
-  SimAgentsResponse,
-  Simulation,
-} from "@/state/ecotwin-types"
-
-type TileSimulationRef = Pick<Simulation, "id" | "plan" | "expand">
+import { HugeiconsIcon } from "@hugeicons/react"
+import { ArrowDown01Icon } from "@hugeicons/core-free-icons"
 
 function isPreviewableImage(filename: string) {
   const lower = filename.toLowerCase()
@@ -79,57 +62,37 @@ function isPreviewableImage(filename: string) {
 export function TilePage() {
   const { tileId } = useParams<{ tileId: string }>()
   const navigate = useNavigate()
-  const [searchParams, setSearchParams] = useSearchParams()
-  const create = searchParams.get("create")
-
-  const tilesList = useAtomValue(tilesListAtom)
+  
   const tileByIdCache = useAtomValue(tileByIdCacheAtom)
   const managementPlans = useAtomValue(managementPlansAtom)
   const managementPlanByIdCache = useAtomValue(managementPlanByIdCacheAtom)
   const managementPlanByIdLoading = useAtomValue(managementPlanByIdLoadingAtom)
-  const managementPlanByIdError = useAtomValue(managementPlanByIdErrorAtom)
   const simulations = useAtomValue(simulationsAtom)
   const simulationByIdCache = useAtomValue(simulationByIdCacheAtom)
-  const simulationByIdLoading = useAtomValue(simulationByIdLoadingAtom)
-  const simulationByIdError = useAtomValue(simulationByIdErrorAtom)
   const simulationResultByRecordId = useAtomValue(simulationResultByRecordIdAtom)
   const simulationResultLoading = useAtomValue(simulationResultLoadingAtom)
-  const simulationResultError = useAtomValue(simulationResultErrorAtom)
-  const simAgents = useAtomValue(simAgentsAtom)
-  const simAgentsLoading = useAtomValue(simAgentsLoadingAtom)
-  const simAgentsError = useAtomValue(simAgentsErrorAtom)
+  const tilesList = useAtomValue(tilesListAtom)
+  
   const landcoversById = useAtomValue(landcoversByIdAtom)
   const oceanDataById = useAtomValue(oceanDataByIdAtom)
-  const tileByIdLoading = useAtomValue(tileByIdLoadingAtom)
-  const tileByIdError = useAtomValue(tileByIdErrorAtom)
+  
   const fetchTileById = useSetAtom(fetchTileByIdAtom)
   const fetchSimulationById = useSetAtom(fetchSimulationByIdAtom)
   const fetchManagementPlanById = useSetAtom(fetchManagementPlanByIdAtom)
   const fetchLandcover = useSetAtom(fetchLandcoverAtom)
   const fetchOceanData = useSetAtom(fetchOceanDataAtom)
   const setHoveredTileImageOverlay = useSetAtom(hoveredTileImageOverlayAtom)
-  const refreshSimAgents = useSetAtom(refreshSimAgentsAtom)
   const fetchSimulationResultByRecordId = useSetAtom(
     fetchSimulationResultByRecordIdAtom
   )
-  const setTileByIdCache = useSetAtom(tileByIdCacheAtom)
-  const setTilesList = useSetAtom(tilesListAtom)
   const setSimulations = useSetAtom(simulationsAtom)
   const setSimulationByIdCache = useSetAtom(simulationByIdCacheAtom)
   const setSimulationResultByRecordId = useSetAtom(simulationResultByRecordIdAtom)
-  const setManagementPlans = useSetAtom(managementPlansAtom)
   const setSelectedTileId = useSetAtom(selectedTileIdAtom)
   const setHoveredTileId = useSetAtom(hoveredTileIdAtom)
+  const setTileByIdCache = useSetAtom(tileByIdCacheAtom)
+  const setTilesList = useSetAtom(tilesListAtom)
 
-  const [managementPlanName, setManagementPlanName] = useState("")
-  const managementPlanNameDirtyRef = useRef(false)
-  const [simulationPlanId, setSimulationPlanId] = useState("")
-  const [simulationIdText, setSimulationIdText] = useState("")
-  const [simulationAgent, setSimulationAgent] = useState("")
-  const [simulationOptionsText, setSimulationOptionsText] = useState("{}")
-  const simulationOptionsDirtyRef = useRef(false)
-  const [creating, setCreating] = useState(false)
-  const [createError, setCreateError] = useState<string | null>(null)
   const [deletingSimulation, setDeletingSimulation] = useState(false)
   const [deleteSimulationError, setDeleteSimulationError] = useState<string | null>(
     null
@@ -184,11 +147,12 @@ export function TilePage() {
     if (!tileId) return
     setSelectedTileId(tileId)
     setHoveredTileId(null)
+    return () => setSelectedTileId(null)
   }, [setHoveredTileId, setSelectedTileId, tileId])
 
   const tile = useMemo(() => {
     if (!tileId) return null
-    const fromList = tilesList?.items.find((t) => t.id === tileId)
+const fromList = tilesList?.items.find((t: any) => t.id === tileId)
     return fromList ?? tileByIdCache[tileId] ?? null
   }, [tileByIdCache, tileId, tilesList?.items])
 
@@ -235,61 +199,7 @@ export function TilePage() {
     void fetchTileById({ id: tileId })
   }, [fetchTileById, tile, tileId])
 
-  useEffect(() => {
-    setCreateError(null)
-    setCreating(false)
-  }, [create])
 
-  useEffect(() => {
-    setDeleteSimulationError(null)
-    setDeletingSimulation(false)
-  }, [activeSimulationId])
-
-  useEffect(() => {
-    if (create !== "management-plan") return
-    if (managementPlanNameDirtyRef.current) return
-    const suggested = tile?.name ? `${tile.name} plan` : "New management plan"
-    setManagementPlanName(suggested)
-  }, [create, tile?.name])
-
-  useEffect(() => {
-    if (create !== "simulation") return
-    if (simulationOptionsDirtyRef.current) return
-    setSimulationOptionsText("{}")
-  }, [create])
-
-  useEffect(() => {
-    if (create !== "simulation") return
-    if (simAgents || simAgentsLoading) return
-    void refreshSimAgents()
-  }, [create, refreshSimAgents, simAgents, simAgentsLoading])
-
-  const agentOptions = useMemo(() => {
-    const res: { label: string; value: string; details?: string }[] = []
-    const list = simAgents as SimAgentsResponse | null
-    if (!list) return res
-    if (Array.isArray(list) && list.length > 0 && typeof list[0] === "string") {
-      for (const v of list as string[]) res.push({ label: v, value: v })
-      return res
-    }
-
-    for (const agent of list as SimAgent[]) {
-      const value =
-        agent.modelPath ?? agent.model_path ?? agent.path ?? agent.name
-      const details = [
-        agent.kind ? `kind: ${agent.kind}` : null,
-        agent.species?.length ? `species: ${agent.species.join(", ")}` : null,
-      ]
-        .filter(Boolean)
-        .join(" · ")
-      res.push({
-        label: agent.name,
-        value,
-        details: details || undefined,
-      })
-    }
-    return res
-  }, [simAgents])
 
   useEffect(() => {
     if (!activeSimulationId) return
@@ -303,63 +213,10 @@ export function TilePage() {
     void fetchManagementPlanById({ id: activePlanId })
   }, [activePlan, activePlanId, fetchManagementPlanById])
 
-  const tileSimulations = useMemo<TileSimulationRef[]>(() => {
-    const expanded = tile?.expand?.simulations
-    if (Array.isArray(expanded) && expanded.length > 0) return expanded
-
-    const ids = tile?.simulations
-    if (!ids?.length) return []
-    if (!simulations?.length) return ids.map((id) => ({ id }))
-
-    const byId = new Map(simulations.map((s) => [s.id, s]))
-    return ids.map((id) => byId.get(id) ?? { id })
-  }, [simulations, tile?.expand?.simulations, tile?.simulations])
-
-  const tileManagementPlans = useMemo(() => {
-    const planIds = new Set<string>()
-    const plans: Pick<ManagementPlan, "id" | "name">[] = []
-
-    for (const sim of tileSimulations as TileSimulationRef[]) {
-      const expandedPlan = sim.expand?.plan
-      const planId = sim.plan
-      if (expandedPlan?.id && !planIds.has(expandedPlan.id)) {
-        planIds.add(expandedPlan.id)
-        plans.push({ id: expandedPlan.id, name: expandedPlan.name })
-        continue
-      }
-      if (planId && !planIds.has(planId)) {
-        planIds.add(planId)
-      }
-    }
-
-    if (!managementPlans?.length) return plans
-
-    const byId = new Map(managementPlans.map((p) => [p.id, p]))
-    for (const id of planIds) {
-      if (plans.some((p) => p.id === id)) continue
-      const found = byId.get(id)
-      if (found) plans.push(found)
-    }
-
-    return plans
-  }, [managementPlans, tileSimulations])
-
-  const clearCreateMode = () => {
-    setSearchParams((prev) => {
-      const next = new URLSearchParams(prev)
-      next.delete("create")
-      return next
-    })
-  }
-
-  const openCreateMode = (mode: "management-plan" | "simulation") => {
-    setCreateError(null)
-    setSearchParams((prev) => {
-      const next = new URLSearchParams(prev)
-      next.set("create", mode)
-      return next
-    })
-  }
+  useEffect(() => {
+    setDeleteSimulationError(null)
+    setDeletingSimulation(false)
+  }, [activeSimulationId])
 
   const refreshTileInCaches = async () => {
     if (!tileId) return
@@ -369,94 +226,11 @@ export function TilePage() {
     })
 
     setTileByIdCache((prev) => ({ ...prev, [tileId]: refreshed }))
-    setTilesList((prev) => {
+    setTilesList((prev: any) => {
       if (!prev?.items?.length) return prev
-      const items = prev.items.map((t) => (t.id === tileId ? refreshed : t))
+      const items = prev.items.map((t: any) => (t.id === tileId ? refreshed : t))
       return { ...prev, items }
     })
-  }
-
-  const onCreateManagementPlan = async () => {
-    if (!tileId || !tile) return
-    const name = managementPlanName.trim()
-    if (!name) {
-      setCreateError("Please enter a name.")
-      return
-    }
-
-    setCreating(true)
-    setCreateError(null)
-    try {
-      const plan = await createManagementPlan({ name })
-      const sim = await createSimulation({ plan: plan.id })
-      const nextSimulations = Array.from(
-        new Set([...(tile.simulations ?? []), sim.id])
-      )
-      await updateTile(tileId, { simulations: nextSimulations })
-
-      setSimulations((prev) => (prev ? [sim, ...prev] : prev))
-      setManagementPlans((prev) => (prev ? [plan, ...prev] : prev))
-      await refreshTileInCaches()
-      clearCreateMode()
-      navigate(`/tile/${tileId}/management-plan/${plan.id}`)
-    } catch (err) {
-      setCreateError(err instanceof Error ? err.message : String(err))
-    } finally {
-      setCreating(false)
-    }
-  }
-
-  const onCreateSimulation = async () => {
-    if (!tileId || !tile) return
-
-    let options: unknown | undefined = undefined
-    const raw = simulationOptionsText.trim()
-    if (raw) {
-      try {
-        options = JSON.parse(raw) as unknown
-      } catch {
-        setCreateError("Simulation options must be valid JSON.")
-        return
-      }
-    }
-
-    setCreating(true)
-    setCreateError(null)
-    try {
-      const data: Parameters<typeof createSimulation>[0] = {}
-      if (simulationPlanId) data.plan = simulationPlanId
-      if (simulationIdText.trim()) data.simulationId = simulationIdText.trim()
-      if (options !== undefined || simulationAgent) {
-        const base: Record<string, unknown> =
-          options && typeof options === "object"
-            ? (options as Record<string, unknown>)
-            : {}
-        if (simulationAgent) {
-          if (
-            typeof base.modelPath !== "string" &&
-            typeof base.model_path !== "string"
-          ) {
-            base.modelPath = simulationAgent
-          }
-        }
-        data.options = base
-      }
-
-      const sim = await createSimulation(data)
-      const nextSimulations = Array.from(
-        new Set([...(tile.simulations ?? []), sim.id])
-      )
-      await updateTile(tileId, { simulations: nextSimulations })
-
-      setSimulations((prev) => (prev ? [sim, ...prev] : prev))
-      await refreshTileInCaches()
-      clearCreateMode()
-      navigate(`/tile/${tileId}/simulation/${sim.id}`)
-    } catch (err) {
-      setCreateError(err instanceof Error ? err.message : String(err))
-    } finally {
-      setCreating(false)
-    }
   }
 
   const onDeleteActiveSimulation = async () => {
@@ -475,7 +249,7 @@ export function TilePage() {
       const current = Array.isArray(tileRecord.simulations)
         ? tileRecord.simulations
         : []
-      const nextSimulations = current.filter((id) => id !== activeSimulationId)
+      const nextSimulations = current.filter((id: string) => id !== activeSimulationId)
 
       await updateTile(tileId, { simulations: nextSimulations })
       await deleteSimulation(activeSimulationId)
@@ -489,7 +263,7 @@ export function TilePage() {
         delete next[activeSimulationId]
         return next
       })
-      setSimulationResultByRecordId((prev) => {
+      setSimulationResultByRecordId((prev: any) => {
         if (!(activeSimulationId in prev)) return prev
         const next = { ...prev }
         delete next[activeSimulationId]
@@ -508,613 +282,161 @@ export function TilePage() {
   return (
     <>
       <LeftPane>
-        <div className="flex items-center justify-between gap-3">
-          <div className="text-sm font-semibold text-zinc-900">
-            Management plans
-          </div>
-          {create !== "management-plan" ? (
+        <GlassPane className="flex flex-col overflow-auto [scrollbar-gutter:stable]">
+          <TileList selectedTileId={tileId} />
+        </GlassPane>
+        <ActionsPane className="animate-in slide-in-from-left-4 fade-in duration-300 shrink-0" />
+      </LeftPane>
+
+      <RightPane className="animate-in slide-in-from-right-4 fade-in duration-300">
+        <div className="flex flex-col gap-6">
+          <div className="flex items-center justify-between pb-2">
             <button
-              type="button"
-              onClick={() => openCreateMode("management-plan")}
-              className="inline-flex cursor-pointer items-center rounded-md bg-white px-2 py-1 text-[11px] font-medium text-zinc-900 shadow-sm ring-1 ring-black/10 hover:bg-zinc-50"
+              onClick={() => navigate("/")}
+              className="text-xs font-medium text-zinc-500 hover:text-zinc-900 flex items-center gap-1 cursor-pointer"
             >
-              Create
+              <HugeiconsIcon icon={ArrowDown01Icon} size={14} className="rotate-90" />
+              Back to map
             </button>
-          ) : null}
-        </div>
-
-        <div className="mt-4">
-          <div className="flex items-center justify-between gap-3">
-          </div>
-
-          {create === "management-plan" ? (
-            <div className="mt-3 rounded-md bg-white/70 p-3 ring-1 ring-black/5">
-              <label className="block text-[11px] font-medium text-zinc-800">
-                Plan name
-                <input
-                  value={managementPlanName}
-                  onChange={(e) => {
-                    managementPlanNameDirtyRef.current = true
-                    setManagementPlanName(e.target.value)
-                  }}
-                  className="mt-1 w-full rounded-md bg-white px-2 py-1 text-xs text-zinc-900 shadow-sm ring-1 ring-black/10 focus:outline-none focus:ring-2 focus:ring-zinc-900/20"
-                  placeholder="My management plan"
-                />
-              </label>
-
-              <div className="mt-2 text-[11px] text-zinc-600">
-                Creates a management plan and a simulation on this tile using
-                the plan.
-              </div>
-
-              {createError ? (
-                <div className="mt-2 rounded-md bg-red-50 px-2 py-1 text-[11px] text-red-700 ring-1 ring-red-200">
-                  {createError}
-                </div>
-              ) : null}
-
-              <div className="mt-3 flex items-center gap-2">
-                <button
-                  type="button"
-                  disabled={creating || !tile}
-                  onClick={() => void onCreateManagementPlan()}
-                  className="inline-flex cursor-pointer items-center rounded-md bg-zinc-900 px-2 py-1 text-[11px] font-medium text-white shadow-sm disabled:cursor-not-allowed disabled:opacity-60"
-                >
-                  {creating ? "Creating…" : "Create"}
-                </button>
-                <button
-                  type="button"
-                  disabled={creating}
-                  onClick={clearCreateMode}
-                  className="inline-flex cursor-pointer items-center rounded-md bg-white px-2 py-1 text-[11px] font-medium text-zinc-900 shadow-sm ring-1 ring-black/10 hover:bg-zinc-50 disabled:cursor-not-allowed disabled:opacity-60"
-                >
-                  Cancel
-                </button>
-              </div>
-            </div>
-          ) : null}
-
-          <div className="mt-3 space-y-2">
-            {tileManagementPlans.length ? (
-              tileManagementPlans.map((plan) => (
-                <Link
-                  key={plan.id}
-                  to={`/tile/${tileId}/management-plan/${plan.id}`}
-                  className={cn(
-                    "block rounded-md bg-white/70 px-3 py-2 ring-1 ring-black/5 hover:bg-white",
-                    activePlanId === plan.id && "ring-2 ring-zinc-900/20"
-                  )}
-                >
-                  <div className="truncate text-xs font-medium text-zinc-900">
-                    {plan.name || "Untitled plan"}
-                  </div>
-                  <div className="mt-0.5 truncate text-[11px] text-zinc-700">
-                    {plan.id}
-                  </div>
-                </Link>
-              ))
-            ) : (
-              <div className="text-xs text-zinc-700">
-                No management plans for this tile.
-              </div>
-            )}
-          </div>
-        </div>
-
-        <div className="mt-8 border-t border-zinc-200 pt-6">
-          <div className="flex items-center justify-between gap-3">
-            <div className="text-sm font-semibold text-zinc-900">Simulations</div>
-            {create !== "simulation" ? (
+            {activeSimulationId || activePlanId ? (
               <button
-                type="button"
-                onClick={() => openCreateMode("simulation")}
-                className="inline-flex cursor-pointer items-center rounded-md bg-white px-2 py-1 text-[11px] font-medium text-zinc-900 shadow-sm ring-1 ring-black/10 hover:bg-zinc-50"
+                onClick={() => navigate(`/tile/${tileId}`)}
+                className="text-xs font-medium text-zinc-500 hover:text-zinc-900 cursor-pointer"
               >
-                Create
+                Clear selection
               </button>
             ) : null}
           </div>
 
-          {create === "simulation" ? (
-            <div className="mt-3 rounded-md bg-white/70 p-3 ring-1 ring-black/5">
-              <label className="block text-[11px] font-medium text-zinc-800">
-                Management plan (optional)
-                <select
-                  value={simulationPlanId}
-                  onChange={(e) => setSimulationPlanId(e.target.value)}
-                  className="mt-1 w-full rounded-md bg-white px-2 py-1 text-xs text-zinc-900 shadow-sm ring-1 ring-black/10 focus:outline-none focus:ring-2 focus:ring-zinc-900/20"
-                >
-                  <option value="">No plan</option>
-                  {(managementPlans ?? []).map((p) => (
-                    <option key={p.id} value={p.id}>
-                      {p.name || p.id}
-                    </option>
-                  ))}
-                </select>
-	              </label>
-
-	              <label className="mt-3 block text-[11px] font-medium text-zinc-800">
-	                Agent (optional)
-	                <select
-	                  value={simulationAgent}
-	                  onChange={(e) => setSimulationAgent(e.target.value)}
-	                  className="mt-1 w-full rounded-md bg-white px-2 py-1 text-xs text-zinc-900 shadow-sm ring-1 ring-black/10 focus:outline-none focus:ring-2 focus:ring-zinc-900/20"
-	                >
-	                  <option value="">Default</option>
-	                  {agentOptions.map((opt) => (
-	                    <option key={opt.value} value={opt.value}>
-	                      {opt.label}
-	                    </option>
-	                  ))}
-	                </select>
-	                {simAgentsError ? (
-	                  <div className="mt-1 text-[11px] text-red-700">
-	                    Failed to load agents: {simAgentsError.message}
-	                  </div>
-	                ) : simAgentsLoading ? (
-	                  <div className="mt-1 text-[11px] text-zinc-600">
-	                    Loading agents…
-	                  </div>
-	                ) : null}
-	                {simulationAgent
-	                  ? (() => {
-	                      const selected = agentOptions.find(
-	                        (o) => o.value === simulationAgent
-	                      )
-	                      return selected?.details ? (
-	                        <div className="mt-1 text-[11px] text-zinc-600">
-	                          {selected.details}
-	                        </div>
-	                      ) : null
-	                    })()
-	                  : null}
-	              </label>
-
-	              <label className="mt-3 block text-[11px] font-medium text-zinc-800">
-	                Simulation ID (optional)
-	                <input
-	                  value={simulationIdText}
-                  onChange={(e) => setSimulationIdText(e.target.value)}
-                  className="mt-1 w-full rounded-md bg-white px-2 py-1 text-xs text-zinc-900 shadow-sm ring-1 ring-black/10 focus:outline-none focus:ring-2 focus:ring-zinc-900/20"
-                  placeholder="UUID from /simulate/upload"
-                />
-              </label>
-
-              <label className="mt-3 block text-[11px] font-medium text-zinc-800">
-                Options (JSON)
-                <textarea
-                  value={simulationOptionsText}
-                  onChange={(e) => {
-                    simulationOptionsDirtyRef.current = true
-                    setSimulationOptionsText(e.target.value)
-                  }}
-                  rows={6}
-                  className="mt-1 w-full resize-y rounded-md bg-white px-2 py-1 font-mono text-[11px] text-zinc-900 shadow-sm ring-1 ring-black/10 focus:outline-none focus:ring-2 focus:ring-zinc-900/20"
-                />
-              </label>
-
-              {createError ? (
-                <div className="mt-2 rounded-md bg-red-50 px-2 py-1 text-[11px] text-red-700 ring-1 ring-red-200">
-                  {createError}
-                </div>
-              ) : null}
-
-              <div className="mt-3 flex items-center gap-2">
-                <button
-                  type="button"
-                  disabled={creating || !tile}
-                  onClick={() => void onCreateSimulation()}
-                  className="inline-flex cursor-pointer items-center rounded-md bg-zinc-900 px-2 py-1 text-[11px] font-medium text-white shadow-sm disabled:cursor-not-allowed disabled:opacity-60"
-                >
-                  {creating ? "Creating…" : "Create"}
-                </button>
-                <button
-                  type="button"
-                  disabled={creating}
-                  onClick={clearCreateMode}
-                  className="inline-flex cursor-pointer items-center rounded-md bg-white px-2 py-1 text-[11px] font-medium text-zinc-900 shadow-sm ring-1 ring-black/10 hover:bg-zinc-50 disabled:cursor-not-allowed disabled:opacity-60"
-                >
-                  Cancel
-                </button>
-              </div>
-            </div>
-          ) : null}
-
-          <div className="mt-3 space-y-2">
-            {tileSimulations.length ? (
-              tileSimulations.map((sim) => (
-                <Link
-                  key={sim.id}
-                  to={`/tile/${tileId}/simulation/${sim.id}`}
-                  className={cn(
-                    "block rounded-md bg-white/70 px-3 py-2 ring-1 ring-black/5 hover:bg-white",
-                    activeSimulationId === sim.id && "ring-2 ring-zinc-900/20"
-                  )}
-                >
-                  <div className="truncate text-xs font-medium text-zinc-900">
-                    {sim.id}
-                  </div>
-                  <div className="mt-0.5 truncate text-[11px] text-zinc-700">
-                    Plan: {sim.expand?.plan?.name ?? (sim.plan ? sim.plan : "—")}
-                  </div>
-                </Link>
-              ))
-            ) : (
-              <div className="text-xs text-zinc-700">
-                No simulations for this tile.
-              </div>
-            )}
-          </div>
-        </div>
-      </LeftPane>
-
-      <RightPane>
-        <div className="flex items-start justify-between gap-3">
-          <div className="min-w-0">
-            <div className="truncate text-sm font-semibold text-zinc-900">
-              {tile?.name || "Tile"}
-            </div>
-            <div className="mt-1 text-xs text-zinc-700">
-              {activeSimulationId || activePlanId
-                ? activeSimulationId
-                  ? `Simulation ${activeSimulationId}`
-                  : `Management plan ${activePlanId}`
-                : tile
-                  ? `${tile.zoom}/${tile.x}/${tile.y}`
-                  : tileId}
-            </div>
-          </div>
-          <div className="flex flex-none items-center gap-2">
-            {activeSimulationId || activePlanId ? (
-              <Link
-                to={`/tile/${tileId}`}
-                className="cursor-pointer rounded-md bg-white px-2 py-1 text-xs text-zinc-800 hover:bg-zinc-50"
-              >
-                Clear
-              </Link>
-            ) : null}
-            <Link
-              to="/"
-              className="cursor-pointer rounded-md bg-white px-2 py-1 text-xs text-zinc-800 hover:bg-zinc-50"
-            >
-              Back
-            </Link>
-          </div>
-        </div>
-
-        {!activeSimulationId && !activePlanId ? (
-          <>
-            <div className="mt-4 space-y-2 text-xs text-zinc-800">
+          <TileDetails 
+            name={tile?.name || "Untitled tile"} 
+            status={simulationResultLoading ? "Running..." : "Ready to run"}
+            createdDate={tile?.created?.substring(0, 10) || "2025-12-12"}
+            landcoverContent={
               <div>
-                <span className="text-zinc-600">id:</span> {tileId}
-              </div>
-              {!tile && tileByIdLoading ? (
-                <div className="text-zinc-700">Loading tile…</div>
-              ) : null}
-              {!tile && tileByIdError ? (
-                <div className="rounded-md bg-red-50 px-2 py-1 text-[11px] text-red-700 ring-1 ring-red-200">
-                  Failed to load tile: {tileByIdError.message}
-                </div>
-              ) : null}
-              {tile?.landcover ? (
-                <div>
-                  <span className="text-zinc-600">landcover:</span>{" "}
-                  {tile.landcover}
-                </div>
-              ) : null}
-              {tile?.oceanData ? (
-                <div>
-                  <span className="text-zinc-600">oceanData:</span>{" "}
-                  {tile.oceanData}
-                </div>
-              ) : null}
-            </div>
-
-            <div className="mt-6 text-sm text-zinc-700">
-              Select a simulation or management plan on the left.
-            </div>
-
-            <div className="mt-6 border-t border-zinc-200 pt-4">
-              <div className="text-xs font-semibold text-zinc-900">
-                Landcover
-              </div>
-              {!tile?.landcover ? (
-                <div className="mt-2 text-sm text-zinc-700">
-                  No landcover linked to this tile.
-                </div>
-              ) : selectedLandcover ? (
-                <>
-                  <div className="mt-2 aspect-square overflow-hidden rounded-md bg-white shadow-sm ring-1 ring-black/10">
-                    {(selectedLandcover as any).color_100 ||
-                    (selectedLandcover as any).color ||
-                    (selectedLandcover as any).texture_100 ||
-                    (selectedLandcover as any).texture ? (
-                      <img
-                        src={
-                          fileUrl(
-                            selectedLandcover as any,
-                            (selectedLandcover as any).color_100 ||
-                              (selectedLandcover as any).color ||
-                              (selectedLandcover as any).texture_100 ||
-                              (selectedLandcover as any).texture
-                          ) ?? ""
-                        }
-                        alt="Landcover"
-                        className="h-full w-full object-cover"
-                        style={{ imageRendering: "pixelated" }}
-                        loading="lazy"
-                        onMouseEnter={() => {
-                          const filename =
-                            (selectedLandcover as any).color_100 ||
-                            (selectedLandcover as any).color ||
-                            (selectedLandcover as any).texture_100 ||
-                            (selectedLandcover as any).texture
-                          const url = fileUrl(selectedLandcover as any, filename)
-                          if (!url) return
-                          setHoveredTileImageOverlay({
-                            tileId: tile?.id ?? tileId ?? "",
-                            url,
-                            resampling: "nearest",
-                            opacity: 0.85,
-                          })
-                        }}
-                        onMouseLeave={clearOverlay}
-                      />
-                    ) : (
-                      <div className="grid h-full place-items-center text-sm text-zinc-600">
-                        No landcover image
+                {!tile?.landcover ? (
+                  <div className="text-xs text-zinc-500 italic">No landcover linked</div>
+                ) : selectedLandcover ? (
+                  <div className="space-y-4">
+                    <div className="aspect-square overflow-hidden rounded-md bg-white shadow-sm ring-1 ring-black/5">
+                      {(selectedLandcover as any).color_100 ||
+                      (selectedLandcover as any).color ||
+                      (selectedLandcover as any).texture_100 ||
+                      (selectedLandcover as any).texture ? (
+                        <img
+                          src={fileUrl(selectedLandcover as any, (selectedLandcover as any).color_100 || (selectedLandcover as any).color || (selectedLandcover as any).texture_100 || (selectedLandcover as any).texture) ?? ""}
+                          alt="Landcover"
+                          className="h-full w-full object-cover"
+                          style={{ imageRendering: "pixelated" }}
+                          onMouseEnter={() => {
+                            const filename = (selectedLandcover as any).color_100 || (selectedLandcover as any).color || (selectedLandcover as any).texture_100 || (selectedLandcover as any).texture
+                            const url = fileUrl(selectedLandcover as any, filename)
+                            if (!url) return
+                            setHoveredTileImageOverlay({ tileId: tile?.id ?? tileId ?? "", url, resampling: "nearest", opacity: 0.85 })
+                          }}
+                          onMouseLeave={clearOverlay}
+                        />
+                      ) : (
+                        <div className="grid h-full place-items-center text-xs text-zinc-400">No image</div>
+                      )}
+                    </div>
+                    {coverageEntries && (
+                      <div className="space-y-2">
+                        <div className="text-[10px] font-bold text-zinc-400 uppercase tracking-wider">Coverage</div>
+                        <div className="space-y-1.5">
+                          {coverageEntries.map((entry) => (
+                            <div key={entry.key} className="flex items-center justify-between gap-2">
+                              <span className="truncate text-[11px] text-zinc-600">{entry.key}</span>
+                              <span className="shrink-0 text-[11px] font-semibold text-zinc-900">
+                                {entry.num !== null ? `${entry.num.toFixed(1)}%` : String(entry.value)}
+                              </span>
+                            </div>
+                          ))}
+                        </div>
                       </div>
                     )}
                   </div>
-
-                  {coverageEntries ? (
-                    <div className="mt-4">
-                      <div className="text-xs text-zinc-600">Coverage</div>
-                      <div className="mt-2 space-y-1 text-xs text-zinc-800">
-                        {coverageEntries.map((entry) => (
-                          <div
-                            key={entry.key}
-                            className="flex items-baseline justify-between gap-3"
-                          >
-                            <div className="min-w-0 truncate text-zinc-700">
-                              {entry.key}
-                            </div>
-                            <div className="flex-none font-medium text-zinc-900">
-                              {entry.num !== null
-                                ? `${new Intl.NumberFormat(undefined, {
-                                    maximumFractionDigits: 1,
-                                  }).format(entry.num)}%`
-                                : String(entry.value)}
-                            </div>
-                          </div>
-                        ))}
-                      </div>
-                    </div>
-                  ) : (selectedLandcover as any).coverage ? (
-                    <div className="mt-4 text-xs text-zinc-700">
-                      Coverage: {JSON.stringify((selectedLandcover as any).coverage)}
-                    </div>
-                  ) : (
-                    <div className="mt-4 text-sm text-zinc-700">
-                      No coverage data.
-                    </div>
-                  )}
-                </>
-              ) : (
-                <div className="mt-2 text-sm text-zinc-700">
-                  Loading landcover…
-                </div>
-              )}
-            </div>
-
-            <div className="mt-6 border-t border-zinc-200 pt-4">
-              <div className="text-xs font-semibold text-zinc-900">
-                Ocean data
+                ) : (
+                  <div className="text-xs text-zinc-500 animate-pulse">Loading landcover…</div>
+                )}
               </div>
-              {!tile?.oceanData ? (
-                <div className="mt-2 text-sm text-zinc-700">
-                  No ocean data linked to this tile.
-                </div>
-              ) : selectedOceanData ? (
-                <div className="mt-3 space-y-3">
-                  {(
-                    [
-                      ["depth", (selectedOceanData as any).depth] as const,
-                      ["surface_elevation", (selectedOceanData as any).surface_elevation] as const,
-                      ["water_temperature", (selectedOceanData as any).water_temperature] as const,
-                      ["water_velocity", (selectedOceanData as any).water_velocity] as const,
-                    ] as const
-                  ).map(([label, filename]) => {
-                    if (!filename) return null
-                    const url = fileUrl(selectedOceanData as any, filename)
-                    const canPreview = isPreviewableImage(filename)
-                    return (
-                      <div
-                        key={label}
-                        className="rounded-md bg-white/70 p-2 ring-1 ring-black/5"
-                      >
-                        <div className="text-[11px] font-medium text-zinc-800">
-                          {label}
-                        </div>
-                        <div className="mt-2 flex items-center gap-3">
-                          <div className="aspect-square w-16 overflow-hidden rounded bg-zinc-200">
+            }
+            oceanDataContent={
+              <div>
+                {!tile?.oceanData ? (
+                  <div className="text-xs text-zinc-500 italic">No ocean data linked</div>
+                ) : selectedOceanData ? (
+                  <div className="grid grid-cols-2 gap-2">
+                    {(
+                      [
+                        ["depth", (selectedOceanData as any).depth] as const,
+                        ["elevation", (selectedOceanData as any).surface_elevation] as const,
+                        ["temp", (selectedOceanData as any).water_temperature] as const,
+                        ["velocity", (selectedOceanData as any).water_velocity] as const,
+                      ] as const
+                    ).map(([label, filename]) => {
+                      if (!filename) return null
+                      const url = fileUrl(selectedOceanData as any, filename)
+                      const canPreview = isPreviewableImage(filename)
+                      return (
+                        <div key={label} className="rounded-md bg-white/50 p-2 ring-1 ring-black/5 hover:bg-white/80 transition-colors">
+                          <div className="text-[10px] font-bold text-zinc-400 uppercase tracking-wider">{label}</div>
+                          <div className="mt-2 aspect-square rounded overflow-hidden bg-zinc-100">
                             {url && canPreview ? (
                               <img
                                 src={url}
                                 alt={label}
                                 className="h-full w-full object-cover"
-                                loading="lazy"
-                                onMouseEnter={() =>
-                                  setHoveredTileImageOverlay({
-                                    tileId: tile?.id ?? tileId ?? "",
-                                    url,
-                                    resampling: "nearest",
-                                    opacity: 0.85,
-                                  })
-                                }
+                                onMouseEnter={() => setHoveredTileImageOverlay({ tileId: tile?.id ?? tileId ?? "", url, resampling: "nearest", opacity: 0.85 })}
                                 onMouseLeave={clearOverlay}
                               />
                             ) : (
-                              <div className="grid h-full w-full place-items-center text-[10px] text-zinc-600">
-                                File
-                              </div>
+                              <div className="grid h-full place-items-center text-[9px] text-zinc-400">FILE</div>
                             )}
                           </div>
-                          <div className="min-w-0">
-                            <div className="truncate text-xs text-zinc-700">
-                              {filename}
-                            </div>
-                          </div>
                         </div>
-                      </div>
-                    )
-                  })}
+                      )
+                    })}
+                  </div>
+                ) : (
+                  <div className="text-xs text-zinc-500 animate-pulse">Loading ocean data…</div>
+                )}
+              </div>
+            }
+          />
+
+          {/* Existing Status/Action logic if active */}
+          {(activeSimulationId || activePlanId) && (
+            <div className="mt-2 space-y-4 pt-6 border-t border-black/5">
+              {activePlanId && (
+                <div className="rounded-md border border-zinc-200 bg-white/50 p-4 shadow-sm">
+                  <div className="text-[10px] font-bold text-zinc-400 uppercase tracking-wider mb-1">Active Plan</div>
+                  <div className="text-sm font-semibold text-zinc-900">{activePlan?.name || "Management plan"}</div>
+                  <div className="text-[10px] text-zinc-500 font-mono mt-1">{activePlanId}</div>
+                  {managementPlanByIdLoading && <div className="mt-2 text-[11px] text-zinc-400 italic">Loading details...</div>}
                 </div>
-              ) : (
-                <div className="mt-2 text-sm text-zinc-700">
-                  Loading ocean data…
+              )}
+
+              {activeSimulationId && activeSimulation && (
+                <div className="space-y-6">
+                  <div className="rounded-md border border-zinc-200 bg-white/50 p-4 shadow-sm">
+                    <div className="text-[10px] font-bold text-zinc-400 uppercase tracking-wider mb-1">Active Simulation</div>
+                    <div className="text-sm font-semibold text-zinc-900">Result visualization</div>
+                    <div className="text-[10px] text-zinc-500 font-mono mt-1">{activeSimulationId}</div>
+                    
+                    {simulationResultByRecordId[activeSimulation.id] ? (
+                      <div className="mt-4 pt-4 border-t border-black/5">
+                        <BiomassChart result={simulationResultByRecordId[activeSimulation.id]} />
+                      </div>
+                    ) : (
+                      <div className="mt-4 text-xs text-zinc-500 italic">Run simulation to see results</div>
+                    )}
+                  </div>
                 </div>
               )}
             </div>
-          </>
-        ) : null}
-
-        {activePlanId ? (
-          <div className="mt-6 rounded-md bg-white/70 p-3 ring-1 ring-black/5">
-            <div className="text-xs font-semibold text-zinc-900">
-              Management plan
-            </div>
-            <div className="mt-1 text-sm text-zinc-900">
-              {activePlan?.name ?? "Plan"}
-            </div>
-            <div className="mt-1 text-xs text-zinc-700">{activePlanId}</div>
-            {managementPlanByIdError && !activePlan ? (
-              <div className="mt-2 rounded-md bg-red-50 px-2 py-1 text-[11px] text-red-700 ring-1 ring-red-200">
-                Failed to load plan: {managementPlanByIdError.message}
-              </div>
-            ) : null}
-            {!activePlan ? (
-              <div className="mt-2 text-[11px] text-zinc-600">
-                {managementPlanByIdLoading ? "Loading plan…" : "—"}
-              </div>
-            ) : null}
-          </div>
-        ) : null}
-
-        {activeSimulationId ? (
-          <div className="mt-6 rounded-md bg-white/70 p-3 ring-1 ring-black/5">
-            <div className="text-xs font-semibold text-zinc-900">Simulation</div>
-            <div className="mt-1 text-xs text-zinc-700">
-              {activeSimulation?.id ?? activeSimulationId}
-            </div>
-            <div className="mt-1 text-[11px] text-zinc-700">
-              Plan:{" "}
-              {activeSimulation?.expand?.plan?.name ??
-                (activeSimulation?.plan ? activeSimulation.plan : "—")}
-            </div>
-            <div className="mt-1 text-[11px] text-zinc-700">
-              Options:{" "}
-              {activeSimulation?.options ? (
-                <span className="font-mono">{"{…}"}</span>
-              ) : (
-                <span className="text-zinc-500">—</span>
-              )}
-            </div>
-
-            <div className="mt-3 flex items-center gap-2">
-              <button
-                type="button"
-                disabled={simulationResultLoading}
-                onClick={() =>
-                  void fetchSimulationResultByRecordId({
-                    simulationRecordId: activeSimulationId,
-                    forceRun: true,
-                  })
-                }
-                className="inline-flex cursor-pointer items-center rounded-md bg-zinc-900 px-2 py-1 text-[11px] font-medium text-white shadow-sm disabled:cursor-not-allowed disabled:opacity-60"
-              >
-                {simulationResultLoading ? "Running…" : "Run simulation"}
-              </button>
-              <button
-                type="button"
-                disabled={deletingSimulation}
-                onClick={() => void onDeleteActiveSimulation()}
-                className="inline-flex cursor-pointer items-center rounded-md bg-red-600 px-2 py-1 text-[11px] font-medium text-white shadow-sm hover:bg-red-700 disabled:cursor-not-allowed disabled:opacity-60"
-              >
-                {deletingSimulation ? "Deleting…" : "Delete"}
-              </button>
-            </div>
-
-            {deleteSimulationError ? (
-              <div className="mt-2 rounded-md bg-red-50 px-2 py-1 text-[11px] text-red-700 ring-1 ring-red-200">
-                {deleteSimulationError}
-              </div>
-            ) : null}
-
-            {simulationByIdError && !activeSimulation ? (
-              <div className="mt-2 rounded-md bg-red-50 px-2 py-1 text-[11px] text-red-700 ring-1 ring-red-200">
-                Failed to load simulation: {simulationByIdError.message}
-              </div>
-            ) : null}
-
-            {!activeSimulation ? (
-              <div className="mt-2 text-[11px] text-zinc-600">
-                {simulationByIdLoading ? "Loading simulation…" : "—"}
-              </div>
-            ) : null}
-
-            {activeSimulation ? (
-              <div className="mt-3">
-                {simulationResultError ? (
-                  <div className="mt-2 rounded-md bg-red-50 px-2 py-1 text-[11px] text-red-700 ring-1 ring-red-200">
-                    {simulationResultError.message}
-                  </div>
-                ) : null}
-
-                {simulationResultByRecordId[activeSimulation.id] ? (
-                  <div className="mt-2 space-y-3">
-                    <div className="space-y-1 text-[11px] text-zinc-700">
-                      <div>
-                        episode_length:{" "}
-                        {
-                          simulationResultByRecordId[activeSimulation.id]
-                            .episode_length
-                        }
-                      </div>
-                      <div>
-                        fitness:{" "}
-                        {simulationResultByRecordId[activeSimulation.id]
-                          .fitness ?? "—"}
-                      </div>
-                      <div>
-                        samples:{" "}
-                        {
-                          simulationResultByRecordId[activeSimulation.id].steps
-                            ?.length
-                        }
-                      </div>
-                      <div>
-                        shape:{" "}
-                        {simulationResultByRecordId[
-                          activeSimulation.id
-                        ].shape?.join("×")}
-                      </div>
-                      <div>
-                        species:{" "}
-                        {simulationResultByRecordId[activeSimulation.id].species
-                          ?.length ?? 0}
-                      </div>
-                    </div>
-
-                    <BiomassChart
-                      result={simulationResultByRecordId[activeSimulation.id]}
-                    />
-                  </div>
-                ) : null}
-              </div>
-            ) : null}
-          </div>
-        ) : null}
+          )}
+        </div>
       </RightPane>
 
       {activeSimulationId && activeSimulationResult ? (

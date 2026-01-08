@@ -14,12 +14,10 @@ export function AppLayout() {
   }, [refreshAppState])
 
   return (
-    <div className="flex h-screen flex-col">
+    <div className="relative h-screen w-full overflow-hidden bg-zinc-950">
+      <MapViewport />
       <TopNav />
-      <main className="relative flex-1">
-        <MapViewport />
-        <Outlet />
-      </main>
+      <Outlet />
     </div>
   )
 }
