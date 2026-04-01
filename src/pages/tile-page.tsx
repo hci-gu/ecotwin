@@ -1,17 +1,14 @@
 import { LeftPane } from "@/components/left-pane"
 import { GlassPane } from "@/components/glass-pane"
 import { ActionsPane } from "@/components/actions-pane"
-import { TileList } from "@/components/tile-list"
+import { SimulationList } from "@/components/simulation-list"
 import { TileDetails } from "@/components/tile-details"
 import { RightPane } from "@/components/right-pane"
 import { BiomassChart } from "@/components/biomass-chart"
 import { BottomPane } from "@/components/bottom-pane"
 import { SimulationTimeline } from "@/components/simulation-timeline"
 import {
-  deleteSimulation,
   fileUrl,
-  getTile,
-  updateTile,
 } from "@/state/ecotwin-api"
 import {
   fetchLandcoverAtom,
@@ -21,24 +18,21 @@ import {
   fetchSimulationByIdAtom,
   fetchSimulationResultByRecordIdAtom,
   fetchManagementPlanByIdAtom,
-  hoveredTileIdAtom,
   landcoversByIdAtom,
   managementPlansAtom,
   managementPlanByIdCacheAtom,
   oceanDataByIdAtom,
-  selectedTileIdAtom,
   simulationByIdCacheAtom,
   simulationsAtom,
   tileByIdCacheAtom,
   managementPlanByIdLoadingAtom,
   simulationResultLoadingAtom,
   simulationResultByRecordIdAtom,
-  tilesListAtom,
 } from "@/state/ecotwin-atoms"
+import { useEcotwinState } from "@/state/use-ecotwin-state"
 import { useAtomValue, useSetAtom } from "jotai"
-import { useEffect, useMemo, useState } from "react"
+import { useEffect, useMemo } from "react"
 import {
-  useMatch,
   useNavigate,
   useParams,
 } from "react-router-dom"
@@ -60,9 +54,19 @@ function isPreviewableImage(filename: string) {
 }
 
 export function TilePage() {
-  const { tileId } = useParams<{ tileId: string }>()
+  const { tileId, simulationId, planId } = useParams<{ 
+    tileId: string; 
+    simulationId?: string; 
+    planId?: string 
+  }>()
   const navigate = useNavigate()
-  
+
+  const {
+    tiles: tilesList,
+    setHoveredTileId,
+    setSelectedTileId,
+  } = useEcotwinState()
+
   const tileByIdCache = useAtomValue(tileByIdCacheAtom)
   const managementPlans = useAtomValue(managementPlansAtom)
   const managementPlanByIdCache = useAtomValue(managementPlanByIdCacheAtom)
@@ -71,7 +75,6 @@ export function TilePage() {
   const simulationByIdCache = useAtomValue(simulationByIdCacheAtom)
   const simulationResultByRecordId = useAtomValue(simulationResultByRecordIdAtom)
   const simulationResultLoading = useAtomValue(simulationResultLoadingAtom)
-  const tilesList = useAtomValue(tilesListAtom)
   
   const landcoversById = useAtomValue(landcoversByIdAtom)
   const oceanDataById = useAtomValue(oceanDataByIdAtom)
@@ -85,23 +88,9 @@ export function TilePage() {
   const fetchSimulationResultByRecordId = useSetAtom(
     fetchSimulationResultByRecordIdAtom
   )
-  const setSimulations = useSetAtom(simulationsAtom)
-  const setSimulationByIdCache = useSetAtom(simulationByIdCacheAtom)
-  const setSimulationResultByRecordId = useSetAtom(simulationResultByRecordIdAtom)
-  const setSelectedTileId = useSetAtom(selectedTileIdAtom)
-  const setHoveredTileId = useSetAtom(hoveredTileIdAtom)
-  const setTileByIdCache = useSetAtom(tileByIdCacheAtom)
-  const setTilesList = useSetAtom(tilesListAtom)
 
-  const [deletingSimulation, setDeletingSimulation] = useState(false)
-  const [deleteSimulationError, setDeleteSimulationError] = useState<string | null>(
-    null
-  )
-
-  const simulationRouteMatch = useMatch("/tile/:tileId/simulation/:simulationId")
-  const planRouteMatch = useMatch("/tile/:tileId/management-plan/:planId")
-  const activeSimulationId = simulationRouteMatch?.params?.simulationId
-  const activePlanId = planRouteMatch?.params?.planId
+  const activeSimulationId = simulationId
+  const activePlanId = planId
 
   const activeSimulation = useMemo(() => {
     if (!activeSimulationId) return null
@@ -152,7 +141,7 @@ export function TilePage() {
 
   const tile = useMemo(() => {
     if (!tileId) return null
-const fromList = tilesList?.items.find((t: any) => t.id === tileId)
+    const fromList = tilesList?.items.find((t: any) => t.id === tileId)
     return fromList ?? tileByIdCache[tileId] ?? null
   }, [tileByIdCache, tileId, tilesList?.items])
 
@@ -199,8 +188,6 @@ const fromList = tilesList?.items.find((t: any) => t.id === tileId)
     void fetchTileById({ id: tileId })
   }, [fetchTileById, tile, tileId])
 
-
-
   useEffect(() => {
     if (!activeSimulationId) return
     if (activeSimulation) return
@@ -213,77 +200,11 @@ const fromList = tilesList?.items.find((t: any) => t.id === tileId)
     void fetchManagementPlanById({ id: activePlanId })
   }, [activePlan, activePlanId, fetchManagementPlanById])
 
-  useEffect(() => {
-    setDeleteSimulationError(null)
-    setDeletingSimulation(false)
-  }, [activeSimulationId])
-
-  const refreshTileInCaches = async () => {
-    if (!tileId) return
-    const refreshed = await getTile(tileId, {
-      expand:
-        "heightmap,landcover,oceanData,simulations,simulations.plan,simulations.plan.tasks",
-    })
-
-    setTileByIdCache((prev) => ({ ...prev, [tileId]: refreshed }))
-    setTilesList((prev: any) => {
-      if (!prev?.items?.length) return prev
-      const items = prev.items.map((t: any) => (t.id === tileId ? refreshed : t))
-      return { ...prev, items }
-    })
-  }
-
-  const onDeleteActiveSimulation = async () => {
-    if (!tileId || !activeSimulationId) return
-
-    const ok = window.confirm("Delete this simulation? This cannot be undone.")
-    if (!ok) return
-
-    setDeletingSimulation(true)
-    setDeleteSimulationError(null)
-
-    try {
-      const tileRecord =
-        tile ?? (await getTile(tileId))
-
-      const current = Array.isArray(tileRecord.simulations)
-        ? tileRecord.simulations
-        : []
-      const nextSimulations = current.filter((id: string) => id !== activeSimulationId)
-
-      await updateTile(tileId, { simulations: nextSimulations })
-      await deleteSimulation(activeSimulationId)
-
-      setSimulations((prev) =>
-        prev ? prev.filter((s) => s.id !== activeSimulationId) : prev
-      )
-      setSimulationByIdCache((prev) => {
-        if (!(activeSimulationId in prev)) return prev
-        const next = { ...prev }
-        delete next[activeSimulationId]
-        return next
-      })
-      setSimulationResultByRecordId((prev: any) => {
-        if (!(activeSimulationId in prev)) return prev
-        const next = { ...prev }
-        delete next[activeSimulationId]
-        return next
-      })
-
-      await refreshTileInCaches()
-      navigate(`/tile/${tileId}`)
-    } catch (err) {
-      setDeleteSimulationError(err instanceof Error ? err.message : String(err))
-    } finally {
-      setDeletingSimulation(false)
-    }
-  }
-
   return (
     <>
       <LeftPane>
-        <GlassPane className="flex flex-col overflow-auto [scrollbar-gutter:stable]">
-          <TileList selectedTileId={tileId} />
+        <GlassPane className="flex flex-col overflow-hidden">
+          <SimulationList />
         </GlassPane>
         <ActionsPane className="animate-in slide-in-from-left-4 fade-in duration-300 shrink-0" />
       </LeftPane>
@@ -405,7 +326,6 @@ const fromList = tilesList?.items.find((t: any) => t.id === tileId)
             }
           />
 
-          {/* Existing Status/Action logic if active */}
           {(activeSimulationId || activePlanId) && (
             <div className="mt-2 space-y-4 pt-6 border-t border-black/5">
               {activePlanId && (
