@@ -258,7 +258,7 @@ export const refreshManagementPlansAtom = atom(null, async (get, set) => {
   set(managementPlansLoadingAtom, true)
   set(managementPlansErrorAtom, null)
   try {
-    const res = await listManagementPlans({ sort: "-created", expand: "tasks" })
+    const res = await listManagementPlans({ sort: "-created", expand: "tasks,tile" })
     set(managementPlansAtom, res)
   } catch (err) {
     set(managementPlansErrorAtom, toError(err))
@@ -284,7 +284,7 @@ export const fetchManagementPlanByIdAtom = atom(
     set(managementPlanByIdErrorAtom, null)
     try {
       const plan = await getManagementPlan(args.id, {
-        expand: args.expand ?? "tasks",
+        expand: args.expand ?? "tasks,tile",
       })
       set(managementPlanByIdCacheAtom, (prev) => ({ ...prev, [args.id]: plan }))
       set(managementPlansAtom, (prev) => {

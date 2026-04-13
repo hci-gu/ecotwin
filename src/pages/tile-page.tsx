@@ -233,6 +233,10 @@ export function TilePage() {
             name={tile?.name || "Untitled tile"} 
             status={simulationResultLoading ? "Running..." : "Ready to run"}
             createdDate={tile?.created?.substring(0, 10) || "2025-12-12"}
+            onManagementPlansClick={() => {
+              if (!tileId) return
+              navigate(`/management-plans?tile=${tileId}`)
+            }}
             landcoverContent={
               <div>
                 {!tile?.landcover ? (

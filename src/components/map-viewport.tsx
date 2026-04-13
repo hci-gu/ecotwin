@@ -29,6 +29,7 @@ import {
   type TileMarkerDatum,
   type ZoomedTileLabelDatum,
 } from "@/map-layers"
+import { tileSelectionCandidateFromLngLat } from "@/lib/tile-selection"
 import {
   Select,
   SelectContent,
@@ -38,14 +39,30 @@ import {
   SelectValue,
 } from "@/components/ui/select"
 import {
+  activityAreaDrawingActiveAtom,
+  activityAreaHoverPointAtom,
+  activityAreaPointsAtom,
+} from "@/state/activity-area-state"
+import {
+  tileCreationHoverCandidateAtom,
+  tileCreationModeAtom,
+  tileCreationSelectedCandidateAtom,
+  tileCreationZoomAtom,
+} from "@/state/tile-creation-state"
+import {
+  fetchManagementPlanByIdAtom,
+  fetchTileByIdAtom,
   hoveredTileIdAtom,
   hoveredTileImageOverlayAtom,
+  managementPlanByIdCacheAtom,
+  managementPlansAtom,
   selectedTileIdAtom,
   simulationResultByRecordIdAtom,
   tileByIdCacheAtom,
   tilesListAtom,
 } from "@/state/ecotwin-atoms"
 import { biomassVisualizationAtom, simulationStepAtom } from "@/state/simulation-ui-state"
+import type { ManagementPlan, Task, Tile } from "@/state/ecotwin-types"
 
 const mapboxAccessToken =
   import.meta.env.VITE_MAPBOX_TOKEN ??
@@ -96,9 +113,76 @@ function findFrameIndex(steps: number[], target: number) {
   return Math.max(0, hi)
 }
 
+function taskData(task?: Task) {
+  const value = task?.data
+  if (!value || typeof value !== "object" || Array.isArray(value)) return undefined
+  return value
+}
+
+function taskAreaGeometry(task?: Task) {
+  const geometry = taskData(task)?.area
+  if (!geometry || typeof geometry !== "object" || Array.isArray(geometry)) return null
+
+  const candidate = geometry as {
+    type?: unknown
+    coordinates?: unknown
+  }
+
+  if (candidate.type !== "Polygon" || !Array.isArray(candidate.coordinates)) return null
+  const firstRing = candidate.coordinates[0]
+  if (!Array.isArray(firstRing) || firstRing.length < 4) return null
+
+  const normalizedRing = firstRing
+    .map((point) => {
+      if (!Array.isArray(point) || point.length < 2) return null
+      const lng = Number(point[0])
+      const lat = Number(point[1])
+      if (!Number.isFinite(lng) || !Number.isFinite(lat)) return null
+      return [lng, lat] as [number, number]
+    })
+    .filter((point): point is [number, number] => Boolean(point))
+
+  if (normalizedRing.length < 4) return null
+
+  return {
+    type: "Polygon" as const,
+    coordinates: [normalizedRing],
+  }
+}
+
+function sortPlanTasks(tasks: Task[]) {
+  return [...tasks].sort((a, b) => {
+    const left = a.start ?? a.created ?? ""
+    const right = b.start ?? b.created ?? ""
+    return left.localeCompare(right)
+  })
+}
+
+function getPlanTasks(plan?: ManagementPlan | null) {
+  return sortPlanTasks(plan?.expand?.tasks ?? [])
+}
+
+function getPlanTile(
+  plan: ManagementPlan | null | undefined,
+  getTileById: (id: string | null | undefined) => Tile | null
+) {
+  if (!plan) return null
+  return plan.expand?.tile ?? getTileById(plan.tile) ?? null
+}
+
+function isSameAreaPoint(left: readonly [number, number], right: readonly [number, number]) {
+  return left[0] === right[0] && left[1] === right[1]
+}
+
+function isActivityAreaClosed(points: readonly [number, number][]) {
+  if (points.length < 4) return false
+  return isSameAreaPoint(points[0], points[points.length - 1])
+}
+
 export function MapViewport() {
   const [mapError, setMapError] = useState<string | null>(null)
   const [mapLoaded, setMapLoaded] = useState(false)
+  const [mapStyleReady, setMapStyleReady] = useState(false)
   const [mapViewState, setMapViewState] = useState<SimpleViewState>(INITIAL_VIEW_STATE)
   const [tooltip, setTooltip] = useState<{ x: number; y: number; text: string } | null>(null)
 
@@ -106,6 +190,9 @@ export function MapViewport() {
   const setBiomassVisualization = useSetAtom(biomassVisualizationAtom)
   const tiles = useAtomValue(tilesListAtom)
   const tileByIdCache = useAtomValue(tileByIdCacheAtom)
+  const managementPlans = useAtomValue(managementPlansAtom)
+  const managementPlanByIdCache = useAtomValue(managementPlanByIdCacheAtom)
+  const fetchManagementPlanById = useSetAtom(fetchManagementPlanByIdAtom)
   const hoveredTileId = useAtomValue(hoveredTileIdAtom)
   const setHoveredTileId = useSetAtom(hoveredTileIdAtom)
   const selectedTileId = useAtomValue(selectedTileIdAtom)
@@ -113,17 +200,33 @@ export function MapViewport() {
   const hoveredImageOverlay = useAtomValue(hoveredTileImageOverlayAtom)
   const simulationResultByRecordId = useAtomValue(simulationResultByRecordIdAtom)
   const simulationStep = useAtomValue(simulationStepAtom)
+  const fetchTileById = useSetAtom(fetchTileByIdAtom)
+  const tileCreationMode = useAtomValue(tileCreationModeAtom)
+  const tileCreationHoverCandidate = useAtomValue(tileCreationHoverCandidateAtom)
+  const tileCreationSelectedCandidate = useAtomValue(tileCreationSelectedCandidateAtom)
+  const tileCreationZoom = useAtomValue(tileCreationZoomAtom)
+  const setTileCreationHoverCandidate = useSetAtom(tileCreationHoverCandidateAtom)
+  const setTileCreationSelectedCandidate = useSetAtom(tileCreationSelectedCandidateAtom)
+  const activityAreaDrawingActive = useAtomValue(activityAreaDrawingActiveAtom)
+  const activityAreaPoints = useAtomValue(activityAreaPointsAtom)
+  const activityAreaHoverPoint = useAtomValue(activityAreaHoverPointAtom)
+  const setActivityAreaPoints = useSetAtom(activityAreaPointsAtom)
+  const setActivityAreaHoverPoint = useSetAtom(activityAreaHoverPointAtom)
 
   const token = mapboxToken || undefined
   const mapRef = useRef<MapRef | null>(null)
 
   const tileRouteMatch = useMatch("/tile/:tileId/*")
   const simulationRouteMatch = useMatch("/tile/:tileId/simulation/:simulationId")
+  const managementPlanRouteMatch = useMatch("/management-plans/:planId")
   const routeTileId = tileRouteMatch?.params?.tileId
   const routeSimulationId = simulationRouteMatch?.params?.simulationId
+  const routeManagementPlanId = managementPlanRouteMatch?.params?.planId
   const isTileRoute = Boolean(tileRouteMatch)
   const isSimulationRoute = Boolean(routeTileId && routeSimulationId)
+  const isManagementPlanRoute = Boolean(routeManagementPlanId)
   const lastRouteZoomedTileIdRef = useRef<string | null>(null)
+  const lastRouteZoomedManagementPlanIdRef = useRef<string | null>(null)
 
   let webglSupported = true
   try {
@@ -149,13 +252,115 @@ export function MapViewport() {
     [tileByIdCache, tiles?.items]
   )
 
-  const activeOutlineTileId = hoveredTileId ?? selectedTileId
-
   const visibleTileMarkers = useMemo(() => {
     if (!tileMarkers.length) return tileMarkers
     if (!isTileRoute || !routeTileId) return tileMarkers
     return tileMarkers.filter(({ tile }) => tile.id !== routeTileId)
   }, [isTileRoute, routeTileId, tileMarkers])
+
+  const activeManagementPlan = useMemo(() => {
+    if (!routeManagementPlanId) return null
+    return (
+      managementPlans?.find((plan) => plan.id === routeManagementPlanId) ??
+      managementPlanByIdCache[routeManagementPlanId] ??
+      null
+    )
+  }, [managementPlanByIdCache, managementPlans, routeManagementPlanId])
+
+  const activeManagementPlanTasks = useMemo(
+    () => getPlanTasks(activeManagementPlan),
+    [activeManagementPlan]
+  )
+  const activeManagementPlanTile = useMemo(
+    () => getPlanTile(activeManagementPlan, getTileById),
+    [activeManagementPlan, getTileById]
+  )
+  const activeManagementPlanBounds = useMemo<mapboxgl.LngLatBoundsLike | null>(() => {
+    if (!activeManagementPlanTile) return null
+
+    const topLeft = tileCornerLngLat(
+      activeManagementPlanTile.x,
+      activeManagementPlanTile.y,
+      activeManagementPlanTile.zoom
+    )
+    const bottomRight = tileCornerLngLat(
+      activeManagementPlanTile.x + 1,
+      activeManagementPlanTile.y + 1,
+      activeManagementPlanTile.zoom
+    )
+
+    return [
+      [topLeft.lng, bottomRight.lat],
+      [bottomRight.lng, topLeft.lat],
+    ]
+  }, [activeManagementPlanTile])
+
+  const activeOutlineTileId =
+    hoveredTileId ??
+    selectedTileId ??
+    (isManagementPlanRoute ? activeManagementPlanTile?.id ?? null : null)
+
+  const tileCreationHoverGeoJson = useMemo(() => {
+    if (!tileCreationMode || !tileCreationHoverCandidate) return null
+    return {
+      type: "FeatureCollection" as const,
+      features: [
+        {
+          type: "Feature" as const,
+          geometry: {
+            type: "Polygon" as const,
+            coordinates: [tileCreationHoverCandidate.polygon],
+          },
+          properties: {},
+        },
+      ],
+    }
+  }, [tileCreationHoverCandidate, tileCreationMode])
+
+  const tileCreationSelectedGeoJson = useMemo(() => {
+    if (!tileCreationMode || !tileCreationSelectedCandidate) return null
+    return {
+      type: "FeatureCollection" as const,
+      features: [
+        {
+          type: "Feature" as const,
+          geometry: {
+            type: "Polygon" as const,
+            coordinates: [tileCreationSelectedCandidate.polygon],
+          },
+          properties: {},
+        },
+      ],
+    }
+  }, [tileCreationMode, tileCreationSelectedCandidate])
+
+  useEffect(() => {
+    if (!routeManagementPlanId) return
+    const cachedPlan =
+      managementPlans?.find((plan) => plan.id === routeManagementPlanId) ??
+      managementPlanByIdCache[routeManagementPlanId] ??
+      null
+    if (cachedPlan?.expand?.tile || !cachedPlan) {
+      if (!cachedPlan) {
+        void fetchManagementPlanById({ id: routeManagementPlanId }).catch(() => {})
+      }
+      return
+    }
+
+    void fetchManagementPlanById({ id: routeManagementPlanId }).catch(() => {})
+  }, [fetchManagementPlanById, managementPlanByIdCache, managementPlans, routeManagementPlanId])
+
+  useEffect(() => {
+    if (tileCreationMode) return
+    setTileCreationHoverCandidate(null)
+    setTileCreationSelectedCandidate(null)
+  }, [setTileCreationHoverCandidate, setTileCreationSelectedCandidate, tileCreationMode])
+
+  useEffect(() => {
+    if (!isManagementPlanRoute) return
+    if (!activeManagementPlan?.tile || activeManagementPlanTile) return
+    void fetchTileById({ id: activeManagementPlan.tile }).catch(() => {})
+  }, [activeManagementPlan?.tile, activeManagementPlanTile, fetchTileById, isManagementPlanRoute])
 
   const biomassBase = useMemo(() => {
     if (!routeTileId || !routeSimulationId) return null
@@ -219,6 +424,7 @@ export function MapViewport() {
     if (!map) return
 
     let canceled = false
+    let retryTimer: number | null = null
     const topLeft = tileCornerLngLat(tile.x, tile.y, tile.zoom)
     const bottomRight = tileCornerLngLat(tile.x + 1, tile.y + 1, tile.zoom)
     const bounds: mapboxgl.LngLatBoundsLike = [
@@ -230,28 +436,80 @@ export function MapViewport() {
       if (canceled) return
       if (lastRouteZoomedTileIdRef.current === routeTileId) return
       try {
-        if (!map.isStyleLoaded?.() || !map.loaded?.()) return
+        if (!map.isStyleLoaded?.() || !map.loaded?.()) {
+          retryTimer = window.setTimeout(attemptZoom, 120)
+          return
+        }
         mapRefValue.fitBounds(bounds, {
           padding: 80,
           duration: 800,
         })
         lastRouteZoomedTileIdRef.current = routeTileId
       } catch (err) {
-        const message = err instanceof Error ? err.message : String(err)
-        if (!message.toLowerCase().includes("style is not done loading")) {
-          console.error(err)
-        }
+        retryTimer = window.setTimeout(attemptZoom, 120)
       }
     }
 
-    map.on("idle", attemptZoom)
     attemptZoom()
 
     return () => {
       canceled = true
-      map.off("idle", attemptZoom)
+      if (retryTimer !== null) {
+        window.clearTimeout(retryTimer)
+      }
     }
   }, [getTileById, mapLoaded, routeTileId])
+
+  useEffect(() => {
+    if (!isManagementPlanRoute || !routeManagementPlanId) {
+      lastRouteZoomedManagementPlanIdRef.current = null
+      return
+    }
+
+    if (!mapLoaded || !activeManagementPlanBounds) return
+    if (lastRouteZoomedManagementPlanIdRef.current === routeManagementPlanId) return
+
+    const mapRefValue = mapRef.current
+    if (!mapRefValue) return
+    const map = mapRefValue.getMap?.()
+    if (!map) return
+
+    let canceled = false
+    let retryTimer: number | null = null
+    const attemptZoom = () => {
+      if (canceled) return
+      if (lastRouteZoomedManagementPlanIdRef.current === routeManagementPlanId) return
+      try {
+        if (!map.isStyleLoaded?.() || !map.loaded?.()) {
+          retryTimer = window.setTimeout(attemptZoom, 120)
+          return
+        }
+        const container = map.getContainer?.()
+        const containerWidth = container?.clientWidth ?? window.innerWidth
+        mapRefValue.fitBounds(activeManagementPlanBounds, {
+          padding: {
+            top: 72,
+            right: Math.max(72, Math.floor(containerWidth * 0.5) + 24),
+            bottom: 72,
+            left: 72,
+          },
+          duration: 800,
+        })
+        lastRouteZoomedManagementPlanIdRef.current = routeManagementPlanId
+      } catch (err) {
+        retryTimer = window.setTimeout(attemptZoom, 120)
+      }
+    }
+
+    attemptZoom()
+
+    return () => {
+      canceled = true
+      if (retryTimer !== null) {
+        window.clearTimeout(retryTimer)
+      }
+    }
+  }, [activeManagementPlanBounds, isManagementPlanRoute, mapLoaded, routeManagementPlanId])
 
   const hoveredImageOverlaySource = useMemo(() => {
     if (!hoveredImageOverlay) return null
@@ -311,6 +569,137 @@ export function MapViewport() {
       label: formatTileLabel(tile.name),
     }
   }, [getTileById, isTileRoute, routeTileId])
+
+  const savedActivityAreaGeoJson = useMemo(() => {
+    if (!isManagementPlanRoute || !activeManagementPlanTasks.length) return null
+
+    const features = activeManagementPlanTasks
+      .map((task) => {
+        const geometry = taskAreaGeometry(task)
+        if (!geometry) return null
+        return {
+          type: "Feature" as const,
+          properties: {
+            taskId: task.id,
+            taskName: task.name || "Untitled activity",
+            taskType: task.type,
+            areaColor:
+              task.type === "hunting"
+                ? "#ef4444"
+                : task.type === "forestry"
+                  ? "#f59e0b"
+                  : task.type === "infrastructure"
+                    ? "#eab308"
+                    : "#64748b",
+          },
+          geometry,
+        }
+      })
+      .filter((feature): feature is NonNullable<typeof feature> => Boolean(feature))
+
+    if (!features.length) return null
+
+    return {
+      type: "FeatureCollection" as const,
+      features,
+    }
+  }, [activeManagementPlanTasks, isManagementPlanRoute])
+
+  const savedActivityAreaLabelsGeoJson = useMemo(() => {
+    if (!isManagementPlanRoute || !activeManagementPlanTasks.length) return null
+
+    const features = activeManagementPlanTasks
+      .map((task) => {
+        const summary = taskData(task)?.areaSummary
+        const centroid = summary?.centroid
+        if (
+          !centroid ||
+          typeof centroid.lng !== "number" ||
+          !Number.isFinite(centroid.lng) ||
+          typeof centroid.lat !== "number" ||
+          !Number.isFinite(centroid.lat)
+        ) {
+          return null
+        }
+
+        return {
+          type: "Feature" as const,
+          properties: {
+            label: task.name || "Untitled activity",
+          },
+          geometry: {
+            type: "Point" as const,
+            coordinates: [centroid.lng, centroid.lat] as [number, number],
+          },
+        }
+      })
+      .filter((feature): feature is NonNullable<typeof feature> => Boolean(feature))
+
+    if (!features.length) return null
+
+    return {
+      type: "FeatureCollection" as const,
+      features,
+    }
+  }, [activeManagementPlanTasks, isManagementPlanRoute])
+
+  const draftActivityAreaFillGeoJson = useMemo(() => {
+    if (!activityAreaDrawingActive || activityAreaPoints.length < 3) return null
+    return {
+      type: "FeatureCollection" as const,
+      features: [
+        {
+          type: "Feature" as const,
+          properties: {},
+          geometry: {
+            type: "Polygon" as const,
+            coordinates: [[...activityAreaPoints, activityAreaPoints[0]]],
+          },
+        },
+      ],
+    }
+  }, [activityAreaDrawingActive, activityAreaPoints])
+
+  const draftActivityAreaLineGeoJson = useMemo(() => {
+    if (!activityAreaDrawingActive || !activityAreaPoints.length) return null
+
+    const coordinates = [...activityAreaPoints]
+    if (activityAreaHoverPoint) {
+      coordinates.push(activityAreaHoverPoint)
+    }
+    if (coordinates.length < 2) return null
+
+    return {
+      type: "FeatureCollection" as const,
+      features: [
+        {
+          type: "Feature" as const,
+          properties: {},
+          geometry: {
+            type: "LineString" as const,
+            coordinates,
+          },
+        },
+      ],
+    }
+  }, [activityAreaDrawingActive, activityAreaHoverPoint, activityAreaPoints])
+
+  const draftActivityAreaPointsGeoJson = useMemo(() => {
+    if (!activityAreaDrawingActive || !activityAreaPoints.length) return null
+    return {
+      type: "FeatureCollection" as const,
+      features: activityAreaPoints.map((point, index) => ({
+        type: "Feature" as const,
+        properties: {
+          index: index + 1,
+        },
+        geometry: {
+          type: "Point" as const,
+          coordinates: point,
+        },
+      })),
+    }
+  }, [activityAreaDrawingActive, activityAreaPoints])
 
   const deckLayers = useMemo<LayersList>(() => {
     const layers: LayersList = []
@@ -380,6 +769,37 @@ export function MapViewport() {
   )
 
   useEffect(() => {
+    if (!mapLoaded) {
+      setMapStyleReady(false)
+      return
+    }
+
+    const map = mapRef.current?.getMap?.()
+    if (!map) {
+      setMapStyleReady(false)
+      return
+    }
+
+    const updateStyleReady = () => {
+      setMapStyleReady(map.isStyleLoaded?.() ?? false)
+    }
+    const markStyleLoading = () => {
+      setMapStyleReady(false)
+    }
+
+    updateStyleReady()
+    map.on("styledataloading", markStyleLoading)
+    map.on("styledata", updateStyleReady)
+    map.on("idle", updateStyleReady)
+
+    return () => {
+      map.off("styledataloading", markStyleLoading)
+      map.off("styledata", updateStyleReady)
+      map.off("idle", updateStyleReady)
+    }
+  }, [mapLoaded])
+
+  useEffect(() => {
     if (!isSimulationRoute) return
     if (!mapLoaded) return
 
@@ -419,21 +839,92 @@ export function MapViewport() {
 
   const onTileMouseMove = useCallback(
     (evt: MapLayerMouseEvent) => {
+      if (tileCreationMode && !isTileRoute && !isManagementPlanRoute) {
+        setHoveredTileId(null)
+        setTileCreationHoverCandidate(
+          tileSelectionCandidateFromLngLat(evt.lngLat.lng, evt.lngLat.lat, tileCreationZoom)
+        )
+        return
+      }
+
+      if (activityAreaDrawingActive) {
+        setHoveredTileId(null)
+        if (isActivityAreaClosed(activityAreaPoints)) {
+          setActivityAreaHoverPoint(null)
+          return
+        }
+        setActivityAreaHoverPoint([evt.lngLat.lng, evt.lngLat.lat])
+        return
+      }
+
       const f = evt.features?.[0]
       const id = f?.properties?.tileId
       setHoveredTileId(typeof id === "string" ? id : null)
     },
-    [setHoveredTileId]
+    [
+      activityAreaDrawingActive,
+      activityAreaPoints,
+      isManagementPlanRoute,
+      isTileRoute,
+      setActivityAreaHoverPoint,
+      setHoveredTileId,
+      setTileCreationHoverCandidate,
+      tileCreationMode,
+      tileCreationZoom,
+    ]
   )
 
   const onTileClick = useCallback(
     (evt: MapLayerMouseEvent) => {
+      if (tileCreationMode && !isTileRoute && !isManagementPlanRoute) {
+        setSelectedTileId(null)
+        setTileCreationSelectedCandidate(
+          tileSelectionCandidateFromLngLat(evt.lngLat.lng, evt.lngLat.lat, tileCreationZoom)
+        )
+        return
+      }
+
+      if (activityAreaDrawingActive) {
+        const clickPoint: [number, number] = [evt.lngLat.lng, evt.lngLat.lat]
+        setActivityAreaPoints((prev) => {
+          if (isActivityAreaClosed(prev)) return prev
+          if (prev.length >= 3) {
+            const map = mapRef.current?.getMap?.()
+            const firstPoint = prev[0]
+            if (map && firstPoint) {
+              const projectedFirst = map.project(firstPoint)
+              const projectedClick = map.project(clickPoint)
+              const distance = Math.hypot(
+                projectedClick.x - projectedFirst.x,
+                projectedClick.y - projectedFirst.y
+              )
+              if (distance <= 18) {
+                return [...prev, firstPoint]
+              }
+            }
+          }
+          return [...prev, clickPoint]
+        })
+        return
+      }
+
       const f = evt.features?.[0]
       const id = f?.properties?.tileId
       if (typeof id === "string") setSelectedTileId(id)
     },
-    [setSelectedTileId]
+    [
+      activityAreaDrawingActive,
+      isManagementPlanRoute,
+      isTileRoute,
+      setActivityAreaPoints,
+      setSelectedTileId,
+      setTileCreationSelectedCandidate,
+      tileCreationMode,
+      tileCreationZoom,
+    ]
   )
+
+  const mapStyleContent = mapLoaded && mapStyleReady
 
   return (
     <div className="absolute inset-0">
@@ -452,52 +943,194 @@ export function MapViewport() {
             scrollZoom={!isTileRoute}
             dragPan={!isTileRoute}
             dragRotate={!isTileRoute}
-            doubleClickZoom={!isTileRoute}
+            doubleClickZoom={!isTileRoute && !activityAreaDrawingActive}
             touchZoomRotate={!isTileRoute}
             keyboard={!isTileRoute}
             cursor={
-              hoveredTileId ? "pointer" : isTileRoute ? "default" : "grab"
+              tileCreationMode && !isTileRoute && !isManagementPlanRoute
+                ? "crosshair"
+                : activityAreaDrawingActive
+                ? "crosshair"
+                : hoveredTileId
+                  ? "pointer"
+                  : isTileRoute
+                    ? "default"
+                    : "grab"
             }
             mapStyle="mapbox://styles/sebastianait/cmj9rorhf004b01s9fj9m1ynh"
             attributionControl={false}
             style={{ width: "100%", height: "100%" }}
-            onLoad={() => setMapLoaded(true)}
+            onLoad={() => {
+              setMapLoaded(true)
+              const map = mapRef.current?.getMap?.()
+              setMapStyleReady(map?.isStyleLoaded?.() ?? false)
+            }}
             onError={(e: ErrorEvent) => {
               const message = e.error?.message ?? "Map error (check console for details)"
               setMapError(message)
               console.error(e.error ?? e)
             }}
           >
-            {hoveredImageOverlaySource ? (
-              <Source
-                id="hovered-tile-image"
-                type="image"
-                url={hoveredImageOverlaySource.url}
-                coordinates={hoveredImageOverlaySource.coordinates}
-              >
-                <Layer
-                  id="hovered-tile-image-layer"
-                  type="raster"
-                  paint={{
-                    "raster-opacity": hoveredImageOverlaySource.opacity,
-                    "raster-resampling": hoveredImageOverlaySource.resampling,
-                  }}
+            {mapStyleContent ? (
+              <>
+                {hoveredImageOverlaySource ? (
+                  <Source
+                    id="hovered-tile-image"
+                    type="image"
+                    url={hoveredImageOverlaySource.url}
+                    coordinates={hoveredImageOverlaySource.coordinates}
+                  >
+                    <Layer
+                      id="hovered-tile-image-layer"
+                      type="raster"
+                      paint={{
+                        "raster-opacity": hoveredImageOverlaySource.opacity,
+                        "raster-resampling": hoveredImageOverlaySource.resampling,
+                      }}
+                    />
+                  </Source>
+                ) : null}
+
+                <MapboxTileOverlays
+                  visibleTileMarkers={visibleTileMarkers}
+                  hoveredTileId={hoveredTileId}
+                  selectedTileId={selectedTileId}
+                  activeOutlinePolygon={activeOutlinePolygon}
+                  zoomedTileLabel={zoomedTileLabel}
                 />
-              </Source>
+
+                {tileCreationHoverGeoJson ? (
+                  <Source id="tile-creation-hover" type="geojson" data={tileCreationHoverGeoJson}>
+                    <Layer
+                      id="tile-creation-hover-fill"
+                      type="fill"
+                      paint={{
+                        "fill-color": "#1d4ed8",
+                        "fill-opacity": 0.08,
+                      }}
+                    />
+                    <Layer
+                      id="tile-creation-hover-line"
+                      type="line"
+                      paint={{
+                        "line-color": "#1d4ed8",
+                        "line-width": 2,
+                        "line-dasharray": [2, 1],
+                      }}
+                    />
+                  </Source>
+                ) : null}
+
+                {tileCreationSelectedGeoJson ? (
+                  <Source id="tile-creation-selected" type="geojson" data={tileCreationSelectedGeoJson}>
+                    <Layer
+                      id="tile-creation-selected-fill"
+                      type="fill"
+                      paint={{
+                        "fill-color": "#14532d",
+                        "fill-opacity": 0.12,
+                      }}
+                    />
+                    <Layer
+                      id="tile-creation-selected-line"
+                      type="line"
+                      paint={{
+                        "line-color": "#14532d",
+                        "line-width": 3,
+                      }}
+                    />
+                  </Source>
+                ) : null}
+
+                {savedActivityAreaGeoJson ? (
+                  <Source id="saved-activity-areas" type="geojson" data={savedActivityAreaGeoJson}>
+                    <Layer
+                      id="saved-activity-areas-fill"
+                      type="fill"
+                      paint={{
+                        "fill-color": ["get", "areaColor"],
+                        "fill-opacity": 0.15,
+                      }}
+                    />
+                    <Layer
+                      id="saved-activity-areas-line"
+                      type="line"
+                      paint={{
+                        "line-color": ["get", "areaColor"],
+                        "line-width": 2,
+                      }}
+                    />
+                  </Source>
+                ) : null}
+
+                {savedActivityAreaLabelsGeoJson ? (
+                  <Source id="saved-activity-area-labels" type="geojson" data={savedActivityAreaLabelsGeoJson}>
+                    <Layer
+                      id="saved-activity-area-labels-layer"
+                      type="symbol"
+                      layout={{
+                        "text-field": ["get", "label"],
+                        "text-size": 12,
+                        "text-offset": [0, -1.2],
+                        "text-anchor": "bottom",
+                      }}
+                      paint={{
+                        "text-color": "#3f3f46",
+                        "text-halo-color": "#ffffff",
+                        "text-halo-width": 1.25,
+                      }}
+                    />
+                  </Source>
+                ) : null}
+
+                {draftActivityAreaFillGeoJson ? (
+                  <Source id="draft-activity-area-fill" type="geojson" data={draftActivityAreaFillGeoJson}>
+                    <Layer
+                      id="draft-activity-area-fill-layer"
+                      type="fill"
+                      paint={{
+                        "fill-color": "#4f7865",
+                        "fill-opacity": 0.22,
+                      }}
+                    />
+                  </Source>
+                ) : null}
+
+                {draftActivityAreaLineGeoJson ? (
+                  <Source id="draft-activity-area-line" type="geojson" data={draftActivityAreaLineGeoJson}>
+                    <Layer
+                      id="draft-activity-area-line-layer"
+                      type="line"
+                      paint={{
+                        "line-color": "#4f7865",
+                        "line-width": 3,
+                        "line-dasharray": [1.4, 1],
+                      }}
+                    />
+                  </Source>
+                ) : null}
+
+                {draftActivityAreaPointsGeoJson ? (
+                  <Source id="draft-activity-area-points" type="geojson" data={draftActivityAreaPointsGeoJson}>
+                    <Layer
+                      id="draft-activity-area-points-layer"
+                      type="circle"
+                      paint={{
+                        "circle-radius": 5,
+                        "circle-color": "#ffffff",
+                        "circle-stroke-color": "#4f7865",
+                        "circle-stroke-width": 2,
+                      }}
+                    />
+                  </Source>
+                ) : null}
+
+                <MapboxDeckOverlay
+                  key={overlayProps.interleaved ? "deck-interleaved" : "deck-overlaid"}
+                  {...overlayProps}
+                />
+              </>
             ) : null}
-
-            <MapboxTileOverlays
-              visibleTileMarkers={visibleTileMarkers}
-              hoveredTileId={hoveredTileId}
-              selectedTileId={selectedTileId}
-              activeOutlinePolygon={activeOutlinePolygon}
-              zoomedTileLabel={zoomedTileLabel}
-            />
-
-            <MapboxDeckOverlay
-              key={overlayProps.interleaved ? "deck-interleaved" : "deck-overlaid"}
-              {...overlayProps}
-            />
 
             {!isTileRoute ? (
               <NavigationControl position="bottom-right" showCompass={false} />

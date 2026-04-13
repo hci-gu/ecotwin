@@ -1,7 +1,9 @@
 import { LeftPane } from "@/components/left-pane"
 import { TileList } from "@/components/tile-list"
 import { RightPane } from "@/components/right-pane"
-import { fileUrl } from "@/state/ecotwin-api"
+import { Input } from "@/components/ui/input"
+import { tileSelectionCandidateFromLngLat } from "@/lib/tile-selection"
+import { createTile, fileUrl } from "@/state/ecotwin-api"
 import {
   fetchLandcoverAtom,
   fetchOceanDataAtom,
@@ -9,9 +11,15 @@ import {
   landcoversByIdAtom,
   oceanDataByIdAtom,
 } from "@/state/ecotwin-atoms"
+import {
+  tileCreationHoverCandidateAtom,
+  tileCreationModeAtom,
+  tileCreationSelectedCandidateAtom,
+  tileCreationZoomAtom,
+} from "@/state/tile-creation-state"
 import { useEcotwinState } from "@/state/use-ecotwin-state"
 import { useAtomValue, useSetAtom } from "jotai"
-import { useEffect, useMemo } from "react"
+import { useEffect, useMemo, useState } from "react"
 import { useNavigate } from "react-router-dom"
 import { GlassPane } from "@/components/glass-pane"
 import { ActionsPane } from "@/components/actions-pane"
@@ -39,6 +47,7 @@ export function MapPage() {
     selectedTileId,
     setSelectedTileId,
     tiles,
+    refreshTiles,
   } = useEcotwinState()
 
   const selectedTile = tiles?.items.find((t) => t.id === selectedTileId)
@@ -47,6 +56,15 @@ export function MapPage() {
   const oceanDataById = useAtomValue(oceanDataByIdAtom)
   const fetchOceanData = useSetAtom(fetchOceanDataAtom)
   const setHoveredTileImageOverlay = useSetAtom(hoveredTileImageOverlayAtom)
+  const tileCreationMode = useAtomValue(tileCreationModeAtom)
+  const setTileCreationMode = useSetAtom(tileCreationModeAtom)
+  const tileCreationZoom = useAtomValue(tileCreationZoomAtom)
+  const setTileCreationZoom = useSetAtom(tileCreationZoomAtom)
+  const tileCreationHoverCandidate = useAtomValue(tileCreationHoverCandidateAtom)
+  const tileCreationSelectedCandidate = useAtomValue(tileCreationSelectedCandidateAtom)
+  const setTileCreationSelectedCandidate = useSetAtom(tileCreationSelectedCandidateAtom)
+  const setTileCreationHoverCandidate = useSetAtom(tileCreationHoverCandidateAtom)
+  const [isCreatingTile, setIsCreatingTile] = useState(false)
 
   const selectedLandcover = useMemo(() => {
     if (!selectedTile?.landcover) return null
@@ -95,11 +113,122 @@ export function MapPage() {
     if (!selectedTileId) setHoveredTileImageOverlay(null)
   }, [selectedTileId, setHoveredTileImageOverlay])
 
+  const existingTileForCandidate = useMemo(() => {
+    if (!tileCreationSelectedCandidate || !tiles?.items?.length) return null
+    return (
+      tiles.items.find(
+        (tile) =>
+          tile.x === tileCreationSelectedCandidate.x &&
+          tile.y === tileCreationSelectedCandidate.y &&
+          tile.zoom === tileCreationSelectedCandidate.zoom
+      ) ?? null
+    )
+  }, [tileCreationSelectedCandidate, tiles?.items])
+
+  const preferredTileCreationZoom = useMemo(() => {
+    const zoomCounts = new Map<number, number>()
+    for (const tile of tiles?.items ?? []) {
+      zoomCounts.set(tile.zoom, (zoomCounts.get(tile.zoom) ?? 0) + 1)
+    }
+    let bestZoom = 6
+    let bestCount = -1
+    for (const [zoom, count] of zoomCounts.entries()) {
+      if (count > bestCount) {
+        bestZoom = zoom
+        bestCount = count
+      }
+    }
+    return bestZoom
+  }, [tiles?.items])
+
+  useEffect(() => {
+    if (tileCreationMode) return
+    setTileCreationZoom(preferredTileCreationZoom)
+  }, [preferredTileCreationZoom, setTileCreationZoom, tileCreationMode])
+
+  useEffect(() => {
+    if (!tileCreationHoverCandidate && !tileCreationSelectedCandidate) return
+
+    if (tileCreationHoverCandidate && tileCreationHoverCandidate.zoom !== tileCreationZoom) {
+      setTileCreationHoverCandidate(
+        tileSelectionCandidateFromLngLat(
+          tileCreationHoverCandidate.center.lng,
+          tileCreationHoverCandidate.center.lat,
+          tileCreationZoom
+        )
+      )
+    }
+
+    if (tileCreationSelectedCandidate && tileCreationSelectedCandidate.zoom !== tileCreationZoom) {
+      setTileCreationSelectedCandidate(
+        tileSelectionCandidateFromLngLat(
+          tileCreationSelectedCandidate.center.lng,
+          tileCreationSelectedCandidate.center.lat,
+          tileCreationZoom
+        )
+      )
+    }
+  }, [
+    setTileCreationHoverCandidate,
+    setTileCreationSelectedCandidate,
+    tileCreationHoverCandidate,
+    tileCreationSelectedCandidate,
+    tileCreationZoom,
+  ])
+
+  function handleToggleCreateLocationMode() {
+    const next = !tileCreationMode
+    setTileCreationMode(next)
+    setTileCreationHoverCandidate(null)
+    setTileCreationSelectedCandidate(null)
+    if (next) {
+      setSelectedTileId(null)
+      return
+    }
+  }
+
+  async function handleCreateLocation() {
+    if (!tileCreationSelectedCandidate) return
+    if (existingTileForCandidate) {
+      navigate(`/tile/${existingTileForCandidate.id}`)
+      return
+    }
+
+    setIsCreatingTile(true)
+    try {
+      const tile = await createTile({
+        name: `Location ${tileCreationSelectedCandidate.zoom}/${tileCreationSelectedCandidate.x}/${tileCreationSelectedCandidate.y}`,
+        visible: true,
+        x: tileCreationSelectedCandidate.x,
+        y: tileCreationSelectedCandidate.y,
+        zoom: tileCreationSelectedCandidate.zoom,
+        bbox: tileCreationSelectedCandidate.bbox,
+      })
+      await refreshTiles()
+      setTileCreationMode(false)
+      setTileCreationHoverCandidate(null)
+      setTileCreationSelectedCandidate(null)
+      navigate(`/tile/${tile.id}`)
+    } finally {
+      setIsCreatingTile(false)
+    }
+  }
+
+  function handleTileCreationZoomChange(value: string) {
+    const parsed = Number.parseInt(value, 10)
+    if (!Number.isFinite(parsed)) return
+    setTileCreationZoom(Math.max(0, Math.min(22, parsed)))
+  }
+
   return (
     <>
         <LeftPane>
           <GlassPane className="flex flex-col overflow-auto [scrollbar-gutter:stable]">
-            <TileList selectedTileId={selectedTileId} />
+            <TileList
+              selectedTileId={selectedTileId}
+              createModeActive={tileCreationMode}
+              onCreateLocationClick={handleToggleCreateLocationMode}
+            />
           </GlassPane>
           {selectedTileId && <ActionsPane className="animate-in slide-in-from-left-4 fade-in duration-300 shrink-0" />}
         </LeftPane>
@@ -131,6 +260,10 @@ export function MapPage() {
               name={selectedTile?.name || "Untitled tile"} 
               status="Ready to run"
               createdDate={selectedTile?.created?.substring(0, 10) || "2025-12-12"}
+              onManagementPlansClick={() => {
+                if (!selectedTile?.id) return
+                navigate(`/management-plans?tile=${selectedTile.id}`)
+              }}
               landcoverContent={
                 <div>
                   {!selectedTile?.landcover ? (
@@ -223,6 +356,114 @@ export function MapPage() {
                 </div>
               }
             />
+          </div>
+        </RightPane>
+      ) : tileCreationMode ? (
+        <RightPane className="animate-in slide-in-from-right-4 fade-in duration-300">
+          <div className="flex flex-col gap-6">
+            <div className="flex items-center justify-between pb-2">
+              <button
+                type="button"
+                onClick={() => {
+                  setTileCreationMode(false)
+                  setTileCreationHoverCandidate(null)
+                  setTileCreationSelectedCandidate(null)
+                }}
+                className="text-xs font-medium text-zinc-500 hover:text-zinc-900 flex items-center gap-1 cursor-pointer"
+              >
+                <HugeiconsIcon icon={ArrowDown01Icon} size={14} className="-rotate-90" />
+                Close preview
+              </button>
+            </div>
+
+            <div className="rounded-xl border border-zinc-200 bg-white/70 p-4 shadow-sm">
+              <div className="text-[10px] font-bold uppercase tracking-wider text-zinc-400">
+                New location
+              </div>
+              <div className="mt-2 text-lg font-semibold text-zinc-950">
+                {tileCreationSelectedCandidate
+                  ? existingTileForCandidate
+                  ? existingTileForCandidate.name || "Existing location"
+                  : `Location ${tileCreationSelectedCandidate.zoom}/${tileCreationSelectedCandidate.x}/${tileCreationSelectedCandidate.y}`
+                  : "Choose location size"}
+              </div>
+              <div className="mt-1 text-xs text-zinc-500">
+                Higher zoom means a smaller location tile. Click on the map to place the current size.
+              </div>
+
+              <div className="mt-5 space-y-3 text-sm text-zinc-700">
+                <div className="flex items-center justify-between gap-4">
+                  <span>Zoom level</span>
+                  <Input
+                    type="number"
+                    min={0}
+                    max={22}
+                    step={1}
+                    value={tileCreationZoom}
+                    onChange={(event) => handleTileCreationZoomChange(event.target.value)}
+                    className="w-20 text-right font-medium text-zinc-950"
+                  />
+                </div>
+                {tileCreationSelectedCandidate ? (
+                  <>
+                    <div className="flex items-center justify-between gap-4">
+                      <span>X / Y</span>
+                      <span className="font-medium text-zinc-950">
+                        {tileCreationSelectedCandidate.x} / {tileCreationSelectedCandidate.y}
+                      </span>
+                    </div>
+                    <div className="flex items-start justify-between gap-4">
+                      <span>Center</span>
+                      <span className="text-right font-medium text-zinc-950">
+                        {tileCreationSelectedCandidate.center.lat.toFixed(4)}°,{" "}
+                        {tileCreationSelectedCandidate.center.lng.toFixed(4)}°
+                      </span>
+                    </div>
+                    <div className="flex items-start justify-between gap-4">
+                      <span>BBox</span>
+                      <span className="max-w-[10rem] break-all text-right font-mono text-[11px] text-zinc-600">
+                        {tileCreationSelectedCandidate.bbox}
+                      </span>
+                    </div>
+                  </>
+                ) : (
+                  <div className="rounded-lg border border-dashed border-zinc-300 bg-zinc-50 px-3 py-3 text-xs text-zinc-500">
+                    No location selected yet. Set a zoom level, then click the map to preview the tile.
+                  </div>
+                )}
+              </div>
+
+              {tileCreationSelectedCandidate && existingTileForCandidate ? (
+                <div className="mt-5 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-800">
+                  This location already exists.
+                </div>
+              ) : null}
+
+              <div className="mt-6 flex gap-3">
+                <button
+                  type="button"
+                  onClick={handleCreateLocation}
+                  disabled={isCreatingTile || !tileCreationSelectedCandidate}
+                  className="flex-1 rounded-md bg-zinc-900 px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-zinc-800 disabled:opacity-60"
+                >
+                  {!tileCreationSelectedCandidate
+                    ? "Select location on map"
+                    : existingTileForCandidate
+                    ? "Open existing location"
+                    : isCreatingTile
+                      ? "Creating..."
+                      : "Create location"}
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setTileCreationSelectedCandidate(null)}
+                  disabled={!tileCreationSelectedCandidate}
+                  className="rounded-md border border-zinc-300 bg-white px-4 py-2 text-sm font-medium text-zinc-700 transition-colors hover:bg-zinc-50"
+                >
+                  Pick another
+                </button>
+              </div>
+            </div>
           </div>
         </RightPane>
       ) : null}

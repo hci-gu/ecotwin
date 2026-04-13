@@ -198,6 +198,8 @@ A management plan groups a set of tasks and can be linked from a `simulation`.
 Fields:
 
 - `name` (text)
+- `area` (json) — selected plan/activity geometry or map-selection payload
+- `areaSummary` (json) — denormalized summary for the selected area
 - `tasks` (relation → `tasks`, any)
 
 Example:
@@ -215,10 +217,17 @@ Tasks that can be attached to a management plan.
 Fields:
 
 - `name` (text)
-- `type` (select: `"landcover"` | `"fishingPolicy"`)
+- `type` (select: `"landcover"` | `"fishingPolicy"` | `"hunting"` | `"forestry"` | `"infrastructure"`)
 - `start` (date)
 - `end` (date)
-- `data` (json)
+- `data` (json) — task parameters and impact metadata, for example:
+  - `objective`
+  - `description`
+  - `cost`
+  - `revenue`
+  - `status`
+  - `targetBiomassChangePct`
+  - `affectedFunctionalGroups`
 
 Example:
 

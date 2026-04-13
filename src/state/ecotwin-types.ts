@@ -2,8 +2,22 @@ import type { RecordModel } from "pocketbase"
 
 export type Id = string
 
+export type ManagementPlanAreaSummary = {
+  areaKm2?: number
+  gridCells?: {
+    width?: number
+    height?: number
+  }
+  centroid?: {
+    lat?: number
+    lng?: number
+  }
+  [key: string]: unknown
+}
+
 export type Tile = RecordModel & {
   name?: string
+  visible?: boolean
   x: number
   y: number
   zoom: number
@@ -93,19 +107,57 @@ export type SimByIdResponse = SimulationResultBase64
 
 export type ManagementPlan = RecordModel & {
   name: string
+  tile?: Id
+  area?: unknown
+  areaSummary?: ManagementPlanAreaSummary
   tasks?: Id[]
   expand?: {
+    tile?: Tile
     tasks?: Task[]
     [key: string]: unknown
   }
 }
 
+export type TaskType =
+  | "landcover"
+  | "fishingPolicy"
+  | "fishing"
+  | "hunting"
+  | "forestry"
+  | "infrastructure"
+
+export type TaskData = {
+  objective?: string
+  description?: string
+  cost?: number
+  revenue?: number
+  status?: string
+  targetBiomassChangePct?: number
+  affectedFunctionalGroups?: string[]
+  area?: unknown
+  areaSummary?: {
+    areaKm2?: number
+    vertexCount?: number
+    centroid?: {
+      lat?: number
+      lng?: number
+    }
+    bbox?: {
+      minLng?: number
+      minLat?: number
+      maxLng?: number
+      maxLat?: number
+    }
+  }
+  [key: string]: unknown
+}
+
 export type Task = RecordModel & {
   name: string
-  type: "landcover" | "fishingPolicy"
+  type: TaskType
   start?: string
   end?: string
-  data?: unknown
+  data?: TaskData
 }
 
 export type User = RecordModel & {

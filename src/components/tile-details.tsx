@@ -63,11 +63,19 @@ type TileDetailsProps = {
   name: string
   status?: string
   createdDate?: string
+  onManagementPlansClick?: () => void
   landcoverContent?: React.ReactNode
   oceanDataContent?: React.ReactNode
 }
 
-export function TileDetails({ name, status = "Ready to run", createdDate = "2025-12-12", landcoverContent, oceanDataContent }: TileDetailsProps) {
+export function TileDetails({
+  name,
+  status = "Ready to run",
+  createdDate = "2025-12-12",
+  onManagementPlansClick,
+  landcoverContent,
+  oceanDataContent,
+}: TileDetailsProps) {
   return (
     <div className="flex flex-col gap-4">
       {/* Header Section */}
@@ -104,8 +112,12 @@ export function TileDetails({ name, status = "Ready to run", createdDate = "2025
               <span className="text-zinc-500">Duration</span>
               <span className="font-medium text-zinc-900">Jan-Dec 2025</span>
             </div>
-            <button className="mt-2 flex w-full items-center justify-center gap-2 rounded-md bg-zinc-800 py-2 text-xs font-medium text-white hover:bg-zinc-700 cursor-pointer">
-              Management plan
+            <button
+              type="button"
+              onClick={onManagementPlansClick}
+              className="mt-2 flex w-full items-center justify-center gap-2 rounded-md bg-zinc-800 py-2 text-xs font-medium text-white hover:bg-zinc-700 cursor-pointer"
+            >
+              Management plans
               <HugeiconsIcon icon={CodeIcon} size={14} />
             </button>
           </div>

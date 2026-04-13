@@ -44,6 +44,12 @@ export async function getTileByXYZ(
     .getFirstListItem<Tile>(filter, { ...options })
 }
 
+export async function createTile(
+  data: Partial<Pick<Tile, "name" | "visible" | "x" | "y" | "zoom" | "bbox">>
+) {
+  return pb.collection("tiles").create<Tile>(data)
+}
+
 export async function getHeightmap(id: string) {
   return pb.collection("heightmaps").getOne<Heightmap>(id)
 }
@@ -78,8 +84,21 @@ export async function listManagementPlans(options?: {
   return pb.collection("managementPlans").getFullList<ManagementPlan>(options)
 }
 
-export async function createManagementPlan(data: Pick<ManagementPlan, "name">) {
+export async function createManagementPlan(
+  data: Partial<Pick<ManagementPlan, "name" | "tile" | "area" | "areaSummary" | "tasks">>
+) {
   return pb.collection("managementPlans").create<ManagementPlan>(data)
+}
+
+export async function updateManagementPlan(
+  id: string,
+  data: Partial<Pick<ManagementPlan, "name" | "tile" | "area" | "areaSummary" | "tasks">>
+) {
+  return pb.collection("managementPlans").update<ManagementPlan>(id, data)
+}
+
+export async function deleteManagementPlan(id: string) {
+  return pb.collection("managementPlans").delete(id)
 }
 
 export async function getManagementPlan(id: string, options?: { expand?: string }) {
@@ -92,6 +111,23 @@ export async function listTasks(
   options?: { sort?: string; filter?: string; fields?: string }
 ) {
   return pb.collection("tasks").getList<Task>(page, perPage, options)
+}
+
+export async function createTask(
+  data: Partial<Pick<Task, "name" | "type" | "start" | "end" | "data">>
+) {
+  return pb.collection("tasks").create<Task>(data)
+}
+
+export async function updateTask(
+  id: string,
+  data: Partial<Pick<Task, "name" | "type" | "start" | "end" | "data">>
+) {
+  return pb.collection("tasks").update<Task>(id, data)
+}
+
+export async function deleteTask(id: string) {
+  return pb.collection("tasks").delete(id)
 }
 
 export async function listTimesteps(

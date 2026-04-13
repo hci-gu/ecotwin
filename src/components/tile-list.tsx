@@ -4,9 +4,15 @@ import { cn } from "@/lib/utils"
 
 type TileListProps = {
   selectedTileId?: string | null
+  createModeActive?: boolean
+  onCreateLocationClick?: () => void
 }
 
-export function TileList({ selectedTileId }: TileListProps) {
+export function TileList({
+  selectedTileId,
+  createModeActive = false,
+  onCreateLocationClick,
+}: TileListProps) {
   const navigate = useNavigate()
   const {
     hoveredTileId,
@@ -83,6 +89,19 @@ export function TileList({ selectedTileId }: TileListProps) {
             })}
           </div>
         ) : null}
+
+        <button
+          type="button"
+          onClick={onCreateLocationClick}
+          className={cn(
+            "mt-5 flex w-full items-center justify-center rounded-md px-4 py-2 text-sm font-medium transition-colors",
+            createModeActive
+              ? "bg-[#3f5a50] text-white hover:bg-[#344b42]"
+              : "bg-zinc-900 text-white hover:bg-zinc-800"
+          )}
+        >
+          {createModeActive ? "Selecting new location..." : "Create Location +"}
+        </button>
       </div>
     </>
   )

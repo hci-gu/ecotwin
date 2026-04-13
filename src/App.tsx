@@ -12,6 +12,7 @@ export function App() {
         <Route index element={<MapPage />} />
         <Route path="tile/:tileId/*" element={<TilePage />} />
         <Route path="management-plans" element={<ManagementPlansPage />} />
+        <Route path="management-plans/:planId" element={<ManagementPlansPage />} />
         <Route path="simulations" element={<SimulationsPage />} />
         <Route path="*" element={<Navigate to="/" replace />} />
       </Route>
