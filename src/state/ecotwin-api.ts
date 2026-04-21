@@ -175,7 +175,10 @@ export async function fetchSimulationResult(
     include_final?: boolean
     modelPath?: string
     model_path?: string
+    agentSet?: string
+    agent_set?: string
     agent?: string
+    agents?: string
     format?: "base64" | "npz"
   }
 ) {

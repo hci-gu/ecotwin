@@ -5,6 +5,11 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
+    "dev:web": "vite",
+    "dev:pocketbase": "cd pocketbase && go run . serve --http=127.0.0.1:8090",
+    "dev:pocketbase:mock": "cd pocketbase && SIMULATION_MOCK=1 go run . serve --http=127.0.0.1:8090",
+    "dev:simulation-mock": "pnpm --filter @ecotwin/mock-simulation dev",
+    "dev:tile-populator": "node --experimental-strip-types services/tile-populator/src/index.ts",
     "build": "tsc -b && vite build",
     "lint": "eslint .",
     "preview": "vite preview"

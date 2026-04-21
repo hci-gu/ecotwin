@@ -15,7 +15,17 @@ import (
 )
 
 var baseUrl = "https://api.mapbox.com/v4"
-var accessToken = os.Getenv("VITE_MAPBOX_ACCESS_TOKEN")
+var accessToken = firstNonEmptyEnv("VITE_MAPBOX_ACCESS_TOKEN", "VITE_MAPBOX_TOKEN")
+
+func firstNonEmptyEnv(keys ...string) string {
+	for _, key := range keys {
+		if value := os.Getenv(key); value != "" {
+			return value
+		}
+	}
+
+	return ""
+}
 
 func DownloadTile(x int, y int, zoom int, typeStr string) image.Image {
 	type Params struct {

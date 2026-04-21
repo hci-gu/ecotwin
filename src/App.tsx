@@ -10,7 +10,9 @@ export function App() {
     <Routes>
       <Route element={<AppLayout />}>
         <Route index element={<MapPage />} />
-        <Route path="tile/:tileId/*" element={<TilePage />} />
+        <Route path="tile/:tileId" element={<TilePage />} />
+        <Route path="tile/:tileId/simulation/:simulationId" element={<TilePage />} />
+        <Route path="tile/:tileId/management-plan/:planId" element={<TilePage />} />
         <Route path="management-plans" element={<ManagementPlansPage />} />
         <Route path="management-plans/:planId" element={<ManagementPlansPage />} />
         <Route path="simulations" element={<SimulationsPage />} />

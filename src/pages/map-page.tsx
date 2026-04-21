@@ -2,15 +2,24 @@ import { LeftPane } from "@/components/left-pane"
 import { TileList } from "@/components/tile-list"
 import { RightPane } from "@/components/right-pane"
 import { Input } from "@/components/ui/input"
+import {
+  hasActiveTileGeneration,
+  landcoverStatusMessage,
+  oceanDataStatusMessage,
+  tilePrimaryStatus,
+} from "@/lib/tile-population"
 import { tileSelectionCandidateFromLngLat } from "@/lib/tile-selection"
 import { createTile, fileUrl } from "@/state/ecotwin-api"
 import {
   fetchLandcoverAtom,
   fetchOceanDataAtom,
+  fetchTileByIdAtom,
   hoveredTileImageOverlayAtom,
   landcoversByIdAtom,
   oceanDataByIdAtom,
+  tileByIdCacheAtom,
 } from "@/state/ecotwin-atoms"
+import type { Landcover, OceanData } from "@/state/ecotwin-types"
 import {
   tileCreationHoverCandidateAtom,
   tileCreationModeAtom,
@@ -50,8 +59,9 @@ export function MapPage() {
     refreshTiles,
   } = useEcotwinState()
 
-  const selectedTile = tiles?.items.find((t) => t.id === selectedTileId)
+  const tileByIdCache = useAtomValue(tileByIdCacheAtom)
   const landcoversById = useAtomValue(landcoversByIdAtom)
+  const fetchTileById = useSetAtom(fetchTileByIdAtom)
   const fetchLandcover = useSetAtom(fetchLandcoverAtom)
   const oceanDataById = useAtomValue(oceanDataByIdAtom)
   const fetchOceanData = useSetAtom(fetchOceanDataAtom)
@@ -65,13 +75,15 @@ export function MapPage() {
   const setTileCreationSelectedCandidate = useSetAtom(tileCreationSelectedCandidateAtom)
   const setTileCreationHoverCandidate = useSetAtom(tileCreationHoverCandidateAtom)
   const [isCreatingTile, setIsCreatingTile] = useState(false)
+  const selectedTile = selectedTileId
+    ? tileByIdCache[selectedTileId] ?? tiles?.items.find((t) => t.id === selectedTileId)
+    : undefined
+  const selectedTilePollId = selectedTile?.id ?? null
+  const selectedTileHasActiveGeneration = hasActiveTileGeneration(selectedTile)
 
   const selectedLandcover = useMemo(() => {
     if (!selectedTile?.landcover) return null
-    return (
-      (selectedTile.expand?.landcover as any) ??
-      landcoversById[selectedTile.landcover]
-    )
+    return selectedTile.expand?.landcover ?? (landcoversById[selectedTile.landcover] as Landcover | undefined) ?? null
   }, [landcoversById, selectedTile])
 
   useEffect(() => {
@@ -82,10 +94,7 @@ export function MapPage() {
 
   const selectedOceanData = useMemo(() => {
     if (!selectedTile?.oceanData) return null
-    return (
-      (selectedTile.expand?.oceanData as any) ??
-      oceanDataById[selectedTile.oceanData]
-    )
+    return selectedTile.expand?.oceanData ?? (oceanDataById[selectedTile.oceanData] as OceanData | undefined) ?? null
   }, [oceanDataById, selectedTile])
 
   useEffect(() => {
@@ -112,6 +121,18 @@ export function MapPage() {
   useEffect(() => {
     if (!selectedTileId) setHoveredTileImageOverlay(null)
   }, [selectedTileId, setHoveredTileImageOverlay])
+
+  useEffect(() => {
+    if (!selectedTilePollId || !selectedTileHasActiveGeneration) return
+
+    void fetchTileById({ id: selectedTilePollId }).catch(() => {})
+    const interval = window.setInterval(() => {
+      void fetchTileById({ id: selectedTilePollId }).catch(() => {})
+      void refreshTiles().catch(() => {})
+    }, 3000)
+
+    return () => window.clearInterval(interval)
+  }, [fetchTileById, refreshTiles, selectedTileHasActiveGeneration, selectedTilePollId])
 
   const existingTileForCandidate = useMemo(() => {
     if (!tileCreationSelectedCandidate || !tiles?.items?.length) return null
@@ -175,6 +196,7 @@ export function MapPage() {
     tileCreationSelectedCandidate,
     tileCreationZoom,
   ])
+  const tileStatus = tilePrimaryStatus(selectedTile ?? null)
 
   function handleToggleCreateLocationMode() {
     const next = !tileCreationMode
@@ -258,16 +280,13 @@ export function MapPage() {
 
             <TileDetails 
               name={selectedTile?.name || "Untitled tile"} 
-              status="Ready to run"
+              status={tileStatus.label}
+              statusTone={tileStatus.tone}
               createdDate={selectedTile?.created?.substring(0, 10) || "2025-12-12"}
-              onManagementPlansClick={() => {
-                if (!selectedTile?.id) return
-                navigate(`/management-plans?tile=${selectedTile.id}`)
-              }}
               landcoverContent={
                 <div>
                   {!selectedTile?.landcover ? (
-                    <div className="text-xs text-zinc-500 italic">No landcover linked</div>
+                    <div className="text-xs text-zinc-500 italic">{landcoverStatusMessage(selectedTile ?? null)}</div>
                   ) : selectedLandcover ? (
                     <div className="space-y-4">
                       <div className="aspect-square overflow-hidden rounded-md bg-white shadow-sm ring-1 ring-black/5">
@@ -309,14 +328,14 @@ export function MapPage() {
                       )}
                     </div>
                   ) : (
-                    <div className="text-xs text-zinc-500 animate-pulse">Loading landcover…</div>
+                    <div className="text-xs text-zinc-500 animate-pulse">Loading landcover...</div>
                   )}
                 </div>
               }
               oceanDataContent={
                 <div>
                   {!selectedTile?.oceanData ? (
-                    <div className="text-xs text-zinc-500 italic">No ocean data linked</div>
+                    <div className="text-xs text-zinc-500 italic">{oceanDataStatusMessage(selectedTile ?? null)}</div>
                   ) : selectedOceanData ? (
                     <div className="grid grid-cols-2 gap-2">
                       {(
@@ -351,7 +370,7 @@ export function MapPage() {
                       })}
                     </div>
                   ) : (
-                    <div className="text-xs text-zinc-500 animate-pulse">Loading ocean data…</div>
+                    <div className="text-xs text-zinc-500 animate-pulse">Loading ocean data...</div>
                   )}
                 </div>
               }

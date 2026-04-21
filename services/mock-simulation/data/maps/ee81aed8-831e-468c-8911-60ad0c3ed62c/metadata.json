@@ -1,0 +1,13 @@
+{
+  "id": "ee81aed8-831e-468c-8911-60ad0c3ed62c",
+  "createdAt": "2026-04-15T19:53:52.046Z",
+  "options": {
+    "world_size": 12,
+    "max_steps": 40,
+    "age_groups": 3
+  },
+  "files": {
+    "texturePath": "/Users/sebastianandreasson/Documents/code/work/gu/ecotwin/services/mock-simulation/data/maps/ee81aed8-831e-468c-8911-60ad0c3ed62c/map.png",
+    "depthPath": "/Users/sebastianandreasson/Documents/code/work/gu/ecotwin/services/mock-simulation/data/maps/ee81aed8-831e-468c-8911-60ad0c3ed62c/depth.png"
+  }
+}

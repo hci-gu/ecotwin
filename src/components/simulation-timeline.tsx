@@ -4,39 +4,52 @@ import { useAtom } from "jotai"
 import { simulationPlayingAtom, simulationStepAtom } from "@/state/simulation-ui-state"
 
 type SimulationTimelineProps = {
+  steps: number[]
   episodeLength: number
 }
 
-export function SimulationTimeline({ episodeLength }: SimulationTimelineProps) {
-  const maxStep = useMemo(() => Math.max(Math.floor(episodeLength) - 1, 0), [episodeLength])
+export function SimulationTimeline({ steps, episodeLength }: SimulationTimelineProps) {
+  const sampledSteps = useMemo(() => {
+    const normalized = steps
+      .map((step) => Number(step))
+      .filter((step) => Number.isFinite(step) && step >= 0)
+    return normalized.length ? normalized : [0]
+  }, [steps])
+  const maxFrame = useMemo(() => Math.max(sampledSteps.length - 1, 0), [sampledSteps.length])
+  const maxEpisodeStep = useMemo(
+    () => Math.max(Math.floor(Number(episodeLength)) - 1, 0),
+    [episodeLength]
+  )
   const [playing, setPlaying] = useAtom(simulationPlayingAtom)
-  const [step, setStep] = useAtom(simulationStepAtom)
+  const [frame, setFrame] = useAtom(simulationStepAtom)
+  const clampedFrame = Math.max(0, Math.min(frame, maxFrame))
+  const currentStep = sampledSteps[clampedFrame] ?? 0
 
   useEffect(() => {
     setPlaying(false)
-    setStep(0)
-  }, [maxStep, setPlaying, setStep])
+    setFrame(0)
+  }, [sampledSteps, setFrame, setPlaying])
 
   useEffect(() => {
     if (!playing) return
-    if (maxStep <= 0) return
+    if (maxFrame <= 0) return
 
     const timer = window.setInterval(() => {
-      setStep((prev) => {
-        const next = Math.min(prev + 1, maxStep)
-        if (next >= maxStep) setPlaying(false)
+      setFrame((prev) => {
+        const next = Math.min(prev + 1, maxFrame)
+        if (next >= maxFrame) setPlaying(false)
         return next
       })
     }, 120)
 
     return () => window.clearInterval(timer)
-  }, [maxStep, playing])
+  }, [maxFrame, playing, setFrame, setPlaying])
 
   return (
     <div className="flex items-center gap-3">
       <button
         type="button"
-        disabled={maxStep <= 0}
+        disabled={maxFrame <= 0}
         onClick={() => setPlaying((p) => !p)}
         className="inline-flex cursor-pointer items-center rounded-md bg-white px-2 py-1 text-[11px] font-medium text-zinc-900 shadow-sm ring-1 ring-black/10 hover:bg-zinc-50 disabled:cursor-not-allowed disabled:opacity-60"
       >
@@ -47,19 +60,19 @@ export function SimulationTimeline({ episodeLength }: SimulationTimelineProps) {
         <input
           type="range"
           min={0}
-          max={maxStep}
+          max={maxFrame}
           step={1}
-          value={step}
+          value={clampedFrame}
           onChange={(e) => {
             setPlaying(false)
-            setStep(Number(e.target.value))
+            setFrame(Number(e.target.value))
           }}
-          className="w-full"
+          className="w-full accent-[#3f5a50]"
         />
       </div>
 
       <div className="shrink-0 text-[11px] tabular-nums text-zinc-700">
-        step {step} / {maxStep}
+        frame {clampedFrame} / {maxFrame} · step {currentStep} / {maxEpisodeStep}
       </div>
     </div>
   )

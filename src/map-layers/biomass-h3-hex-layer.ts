@@ -21,6 +21,9 @@ export function h3ResolutionForZoom(zoom: number) {
 function buildBiomassHexes(frame: BiomassOverlayFrame, h3Resolution: number) {
   const { data, h, w, s, bounds } = frame
   const frameOffset = frame.frame * h * w * s
+  const speciesIndices =
+    frame.speciesIndices?.filter((index) => index >= 0 && index < s) ??
+    Array.from({ length: s }, (_, index) => index)
 
   const byHex = new Map<string, number>()
   let maxCount = 0
@@ -33,7 +36,7 @@ function buildBiomassHexes(frame: BiomassOverlayFrame, h3Resolution: number) {
       const cellBase = frameOffset + (dataY * w + dataX) * s
 
       let weight = 0
-      for (let sp = 0; sp < s; sp++) {
+      for (const sp of speciesIndices) {
         weight += data[cellBase + sp] ?? 0
       }
       if (weight <= 0) continue
@@ -81,4 +84,3 @@ export function createBiomassH3HexagonLayer(
     getElevation: (d) => d.count,
   })
 }
-

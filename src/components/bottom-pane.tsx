@@ -1,14 +1,20 @@
+import { cn } from "@/lib/utils"
 import type { ReactNode } from "react"
 
 type BottomPaneProps = {
   children?: ReactNode
+  className?: string
 }
 
-export function BottomPane({ children }: BottomPaneProps) {
+export function BottomPane({ children, className }: BottomPaneProps) {
   return (
-    <aside className="absolute left-1/2 z-30 w-[720px] -translate-x-1/2 overflow-hidden border border-white/40 bg-white/80 shadow-2xl backdrop-blur-md bottom-pane max-w-[calc(100%-var(--spacing-pane)*2)] rounded-pane">
+    <aside
+      className={cn(
+        "absolute z-30 overflow-hidden border border-white/40 bg-white/80 shadow-2xl backdrop-blur-md bottom-pane rounded-pane",
+        className
+      )}
+    >
       <div className="p-4">{children}</div>
     </aside>
   )
 }
-

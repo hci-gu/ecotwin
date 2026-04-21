@@ -267,7 +267,8 @@ If you already have a PocketBase `simulations` record id (the record `id`), you 
 What it does:
 
 - Loads the `simulations` record.
-- Finds the `tiles` record that contains it in `tiles.simulations`.
+- Loads the linked `managementPlans` record from `simulations.plan`.
+- Loads the linked tile from `managementPlans.tile`.
 - Uploads the tile assets (`tiles.satellite` as `texture`, `tiles.oceanData.depth` as `depth`) to `POST /simulate/upload`.
 - Stores the returned upstream UUID into `simulations.simulationId` (and clears cached result files).
 - Runs `GET /simulate/<simulation_id>` and forwards the response (also cached into `resultJson` / `resultNpz`).
@@ -280,6 +281,15 @@ The workflow is:
 2. Run the simulation and retrieve sampled per-cell biomass snapshots.
 
 The upstream stores uploaded files under `maps/<simulation_id>/map.png` and `maps/<simulation_id>/depth.png`.
+
+Important model-loading note:
+
+- Current trained agents are usually saved as `{generation}_${species}_{fitness}.npy.npz`.
+- Examples:
+  - `10_$cod_9079.34.npy.npz`
+  - `8_$sprat_14953.08.npy.npz`
+  - `12_$sprat__a0_14568.62.npy.npz`
+- If you are using multiple age groups, the `species` part is the full acting species id, not just the base species name.
 
 ### 1) Create simulation
 
@@ -320,7 +330,18 @@ This runs a simulation using the uploaded map and returns a sampled biomass time
 - `format` (string): output format:
   - `base64` (default): JSON with base64-encoded raw bytes
   - `npz`: returns `application/octet-stream` containing a compressed NumPy `.npz`
-- `agent` / `agent` (string): path to a agent folder
+- `agentSet` / `agent_set` / `agent` / `agents` (string): load models from `agents/<agentSet>/`.
+  - if the folder contains exactly 1 `.npy.npz` / `.npz`, that model is reused for all acting species
+  - if it contains multiple files, the API infers species from the filename and requires one model per acting species
+  - current training output names look like `{generation}_${species}_{fitness}.npy.npz`
+  - with `age_groups=1`, the acting species are `sprat`, `herring`, `cod`
+  - with `age_groups=3`, the acting species are:
+    - `sprat__a0`, `sprat__a1`, `sprat__a2`
+    - `herring__a0`, `herring__a1`, `herring__a2`
+    - `cod__a0`, `cod__a1`, `cod__a2`
+  - in that case, a multi-file agent set must contain filenames for those full age-group names, for example `12_$cod__a2_1234.5.npy.npz`
+- `modelPath` / `model_path` (string): path to a `.npy.npz` / `.npz` model file. This is loaded once and reused for all acting species.
+- if neither `agentSet` nor `modelPath` is provided, the server falls back to a hardcoded local default model folder. For predictable requests, pass one of them explicitly.
 
 #### Response format: `format=base64` (default)
 
@@ -329,6 +350,8 @@ This runs a simulation using the uploaded map and returns a sampled biomass time
 - `simulation_id`: string
 - `world_size`: int
 - `species`: array of strings (order of the last axis in `biomass`)
+  - this is `["plankton", "sprat", "herring", "cod"]` when `age_groups=1`
+  - when `age_groups>1`, this expands to age-group names such as `sprat__a0`, `sprat__a1`, ...
 - `sample_every`: int
 - `include_final`: bool
 - `dtype`: string (currently `float32`)
@@ -417,5 +440,77 @@ Common keys:
 
 - `world_size` / `worldSize`
 - `max_steps` / `maxSteps`
+- `age_groups` / `ageGroups`
+- `age_step_interval` / `ageStepInterval`
 
 Unrecognized keys are ignored.
+
+Age-group behavior:
+
+- `age_groups=1` keeps the default learned species: `sprat`, `herring`, `cod`
+- `age_groups>1` expands both the learned species set and the output tensor channels
+- if you use `agentSet` with multiple files, filenames must match the expanded acting species names, not only the base names
+
+### Example: `age_groups=3`
+
+Example upload request:
+
+```bash
+curl -X POST http://localhost:4000/simulate/upload \
+  -F "texture=@/path/to/map.png" \
+  -F "depth=@/path/to/depth.png" \
+  -F 'options={"world_size":50,"max_steps":3000,"age_groups":3,"age_step_interval":50}'
+```
+
+Example agent-set layout for that run:
+
+```text
+agents/my_age3_set/
+  12_$sprat__a0_14568.62.npy.npz
+  12_$sprat__a1_13210.11.npy.npz
+  12_$sprat__a2_15100.44.npy.npz
+  12_$herring__a0_12001.50.npy.npz
+  12_$herring__a1_11888.20.npy.npz
+  12_$herring__a2_12555.90.npy.npz
+  12_$cod__a0_9800.25.npy.npz
+  12_$cod__a1_10010.75.npy.npz
+  12_$cod__a2_10333.40.npy.npz
+```
+
+Example simulation request using that agent set:
+
+```bash
+curl "http://localhost:4000/simulate/<simulation_id>?agentSet=my_age3_set&sampleEvery=25&format=npz"
+```
+
+Expected response metadata:
+
+- `species` will contain `plankton` plus all age-group-expanded fish species
+- with `age_groups=3`, that means:
+  - `plankton`
+  - `sprat__a0`, `sprat__a1`, `sprat__a2`
+  - `herring__a0`, `herring__a1`, `herring__a2`
+  - `cod__a0`, `cod__a1`, `cod__a2`
+- the last axis of `biomass` follows that `species` order exactly
+
+## List available agent sets
+
+**Route**
+
+`GET /simulate/agents`
+
+Returns an array of objects describing subfolders under `agents/`.
+
+Each object has:
+
+- `name`: folder name
+- `kind`: one of:
+  - `empty`: folder contains no supported model files
+  - `single`: exactly one model file; API will reuse it for all acting species
+  - `multi`: multiple model files; `species` lists the species successfully inferred from filenames
+  - `error`: the folder could not be summarized
+- `files`: model filenames found in the folder
+- `species`: species inferred from those filenames under the server's current species configuration
+- `error`: only present when `kind=error`
+
+This endpoint is useful for checking whether the server can infer species from your filenames. If you plan to run with `age_groups>1`, make sure your filenames use the expanded acting species names shown above.

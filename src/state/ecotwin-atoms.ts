@@ -2,6 +2,7 @@ import { atom } from "jotai"
 
 import type { ListResult } from "@/state/ecotwin-api"
 import {
+  createSimulation as createSimulationRecord,
   fileUrl,
   fetchSimAgents,
   fetchSimById,
@@ -40,6 +41,17 @@ import type {
 
 function toError(err: unknown) {
   return err instanceof Error ? err : new Error(String(err))
+}
+
+function mergeTileIntoList(list: ListResult<Tile> | null, tile: Tile) {
+  if (!list) return list
+
+  const index = list.items.findIndex((item) => item.id === tile.id)
+  if (index === -1) return list
+
+  const items = [...list.items]
+  items[index] = tile
+  return { ...list, items }
 }
 
 export const hoveredTileIdAtom = atom<string | null>(null)
@@ -118,6 +130,8 @@ export const fetchTileByXYZAtom = atom(
 	        fields: args.fields,
 	      })
       set(tileByXYZCacheAtom, (prev) => ({ ...prev, [key]: tile }))
+      set(tileByIdCacheAtom, (prev) => ({ ...prev, [tile.id]: tile }))
+      set(tilesListAtom, (prev) => mergeTileIntoList(prev, tile))
       return tile
     } catch (err) {
       set(tileByXYZErrorAtom, toError(err))
@@ -142,7 +156,10 @@ export const fetchTileByIdAtom = atom(null, async (get, set, args: { id: string;
         "heightmap,landcover,oceanData,simulations,simulations.plan,simulations.plan.tasks",
       fields: args.fields,
     })
-    set(tileByIdCacheAtom, (prev) => ({ ...prev, [args.id]: tile }))
+    const xyzKey = `${tile.zoom}/${tile.x}/${tile.y}`
+    set(tileByIdCacheAtom, (prev) => ({ ...prev, [tile.id]: tile }))
+    set(tileByXYZCacheAtom, (prev) => ({ ...prev, [xyzKey]: tile }))
+    set(tilesListAtom, (prev) => mergeTileIntoList(prev, tile))
     return tile
   } catch (err) {
     set(tileByIdErrorAtom, toError(err))
@@ -226,6 +243,32 @@ export const refreshSimulationsAtom = atom(null, async (get, set) => {
 export const simulationByIdCacheAtom = atom<Record<string, Simulation>>({})
 export const simulationByIdLoadingAtom = atom(false)
 export const simulationByIdErrorAtom = atom<Error | null>(null)
+export const createSimulationAtom = atom(
+  null,
+  async (
+    _get,
+    set,
+    args: {
+      planId: string
+      options?: Simulation["options"]
+    }
+  ) => {
+    const created = await createSimulationRecord({
+      plan: args.planId,
+      options: args.options,
+    })
+    const simulation = await getSimulation(created.id, {
+      expand: "plan,plan.tasks",
+    })
+    set(simulationByIdCacheAtom, (prev) => ({ ...prev, [simulation.id]: simulation }))
+    set(simulationsAtom, (prev) => {
+      if (!prev?.length) return [simulation]
+      return [simulation, ...prev.filter((item) => item.id !== simulation.id)]
+    })
+    return simulation
+  }
+)
+
 export const fetchSimulationByIdAtom = atom(null, async (get, set, args: { id: string; expand?: string; fields?: string }) => {
   if (get(simulationByIdLoadingAtom)) return get(simulationByIdCacheAtom)[args.id]
   set(simulationByIdLoadingAtom, true)
@@ -313,7 +356,7 @@ export const refreshTasksAtom = atom(
     set(tasksErrorAtom, null)
     try {
       const res = await listTasks(args?.page ?? 1, args?.perPage ?? 50, {
-        sort: args?.sort ?? "-created",
+        sort: args?.sort ?? "-start",
         filter: args?.filter,
       })
       set(tasksListAtom, res)
@@ -519,6 +562,5 @@ export const refreshEcotwinStateAtom = atom(null, async (_get, set) => {
     set(refreshSimulationsAtom),
     set(refreshSimAgentsAtom),
     set(refreshManagementPlansAtom),
-    set(refreshTasksAtom),
   ])
 })

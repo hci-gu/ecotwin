@@ -36,3 +36,5 @@ pocketbase/pocketbase
 pocketbase/app%
 pocketbase/.gocache
 pocketbase/.gomodcache
+
+service_account.json

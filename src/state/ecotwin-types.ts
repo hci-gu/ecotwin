@@ -1,6 +1,7 @@
 import type { RecordModel } from "pocketbase"
 
 export type Id = string
+export type TileAssetStatus = "pending" | "processing" | "ready" | "failed" | "skipped"
 
 export type ManagementPlanAreaSummary = {
   areaKm2?: number
@@ -23,6 +24,8 @@ export type Tile = RecordModel & {
   zoom: number
   bbox?: unknown
   metersPerPixel?: number
+  landcoverStatus?: TileAssetStatus
+  oceanDataStatus?: TileAssetStatus
   satellite?: string
   heightmap?: Id
   landcover?: Id
@@ -80,14 +83,16 @@ export type Timestep = RecordModel & {
 
 export type SimAgent = {
   name: string
-  kind?: "multi" | "single"
+  kind?: "empty" | "single" | "multi" | "error"
+  files?: string[]
   species?: string[]
+  error?: string
   modelPath?: string
   model_path?: string
   path?: string
 }
 
-export type SimAgentsResponse = string[] | SimAgent[]
+export type SimAgentsResponse = SimAgent[]
 export type SimulationResultBase64 = {
   simulation_id: string
   world_size: number

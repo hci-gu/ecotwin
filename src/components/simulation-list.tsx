@@ -2,7 +2,7 @@ import { useNavigate, useParams } from "react-router-dom"
 import { cn } from "@/lib/utils"
 import { useAtomValue } from "jotai"
 import { simulationsAtom, managementPlansAtom } from "@/state/ecotwin-atoms"
-import { useState } from "react"
+import { useEffect, useMemo, useState } from "react"
 import { HugeiconsIcon } from "@hugeicons/react"
 import { PlayIcon, NoteIcon } from "@hugeicons/core-free-icons"
 
@@ -16,7 +16,32 @@ export function SimulationList({ className }: SimulationListProps) {
   const simulations = useAtomValue(simulationsAtom)
   const managementPlans = useAtomValue(managementPlansAtom)
   
-  const [activeTab, setActiveTab] = useState<"simulations" | "plans">("simulations")
+  const [activeTab, setActiveTab] = useState<"simulations" | "plans">(
+    simulationId ? "simulations" : "plans"
+  )
+
+  useEffect(() => {
+    setActiveTab(simulationId ? "simulations" : "plans")
+  }, [simulationId])
+
+  const filteredPlans = useMemo(() => {
+    if (!tileId) return managementPlans ?? []
+    return (managementPlans ?? []).filter(
+      (plan) => plan.tile === tileId || plan.expand?.tile?.id === tileId
+    )
+  }, [managementPlans, tileId])
+
+  const filteredPlanIds = useMemo(
+    () => new Set(filteredPlans.map((plan) => plan.id)),
+    [filteredPlans]
+  )
+
+  const filteredSimulations = useMemo(() => {
+    return (simulations ?? []).filter((sim) => {
+      const simPlanId = sim.expand?.plan?.id ?? sim.plan
+      return !!simPlanId && filteredPlanIds.has(simPlanId)
+    })
+  }, [filteredPlanIds, simulations])
 
   return (
     <div className={cn("flex flex-col h-full", className)}>
@@ -49,10 +74,10 @@ export function SimulationList({ className }: SimulationListProps) {
         {activeTab === "simulations" ? (
           <div className="space-y-3">
             <h2 className="text-xs font-bold text-zinc-400 uppercase tracking-wider mb-2">Simulation Runs</h2>
-            {!simulations?.length && (
+            {!filteredSimulations.length && (
               <div className="text-xs text-zinc-500 italic py-4">No simulations found for this tile.</div>
             )}
-            {simulations?.map((sim) => {
+            {filteredSimulations.map((sim) => {
               const isActive = simulationId === sim.id
               return (
                 <div
@@ -77,6 +102,12 @@ export function SimulationList({ className }: SimulationListProps) {
                         {sim.simulationId || "Untitled Run"}
                       </div>
                       <div className={cn(
+                        "truncate text-[10px]",
+                        isActive ? "text-white/70" : "text-zinc-600"
+                      )}>
+                        {sim.expand?.plan?.name || "Unassigned plan"}
+                      </div>
+                      <div className={cn(
                         "text-[10px]",
                         isActive ? "text-white/60" : "text-zinc-500"
                       )}>
@@ -91,10 +122,10 @@ export function SimulationList({ className }: SimulationListProps) {
         ) : (
           <div className="space-y-3">
             <h2 className="text-xs font-bold text-zinc-400 uppercase tracking-wider mb-2">Management Plans</h2>
-            {!managementPlans?.length && (
-              <div className="text-xs text-zinc-500 italic py-4">No management plans found.</div>
+            {!filteredPlans.length && (
+              <div className="text-xs text-zinc-500 italic py-4">No management plans found for this tile.</div>
             )}
-            {managementPlans?.map((plan) => {
+            {filteredPlans.map((plan) => {
               const isActive = planId === plan.id
               return (
                 <div

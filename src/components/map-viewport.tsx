@@ -31,14 +31,6 @@ import {
 } from "@/map-layers"
 import { tileSelectionCandidateFromLngLat } from "@/lib/tile-selection"
 import {
-  Select,
-  SelectContent,
-  SelectGroup,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from "@/components/ui/select"
-import {
   activityAreaDrawingActiveAtom,
   activityAreaHoverPointAtom,
   activityAreaPointsAtom,
@@ -61,7 +53,11 @@ import {
   tileByIdCacheAtom,
   tilesListAtom,
 } from "@/state/ecotwin-atoms"
-import { biomassVisualizationAtom, simulationStepAtom } from "@/state/simulation-ui-state"
+import {
+  biomassVisualizationAtom,
+  selectedSimulationSpeciesAtom,
+  simulationStepAtom,
+} from "@/state/simulation-ui-state"
 import type { ManagementPlan, Task, Tile } from "@/state/ecotwin-types"
 
 const mapboxAccessToken =
@@ -95,22 +91,6 @@ const INITIAL_VIEW_STATE: SimpleViewState = {
   zoom: 5,
   bearing: 0,
   pitch: 0,
-}
-
-function findFrameIndex(steps: number[], target: number) {
-  if (!steps.length) return 0
-  if (target <= steps[0]) return 0
-  if (target >= steps[steps.length - 1]) return steps.length - 1
-  let lo = 0
-  let hi = steps.length - 1
-  while (lo <= hi) {
-    const mid = (lo + hi) >> 1
-    const v = steps[mid]!
-    if (v === target) return mid
-    if (v < target) lo = mid + 1
-    else hi = mid - 1
-  }
-  return Math.max(0, hi)
 }
 
 function taskData(task?: Task) {
@@ -182,12 +162,11 @@ function isActivityAreaClosed(points: readonly [number, number][]) {
 export function MapViewport() {
   const [mapError, setMapError] = useState<string | null>(null)
   const [mapLoaded, setMapLoaded] = useState(false)
-  const [mapStyleReady, setMapStyleReady] = useState(false)
   const [mapViewState, setMapViewState] = useState<SimpleViewState>(INITIAL_VIEW_STATE)
   const [tooltip, setTooltip] = useState<{ x: number; y: number; text: string } | null>(null)
 
   const biomassVisualization = useAtomValue(biomassVisualizationAtom)
-  const setBiomassVisualization = useSetAtom(biomassVisualizationAtom)
+  const selectedSimulationSpecies = useAtomValue(selectedSimulationSpeciesAtom)
   const tiles = useAtomValue(tilesListAtom)
   const tileByIdCache = useAtomValue(tileByIdCacheAtom)
   const managementPlans = useAtomValue(managementPlansAtom)
@@ -378,6 +357,10 @@ export function MapViewport() {
       Array.isArray(result.steps) && result.steps.length === n
         ? result.steps.map((v) => Number(v))
         : Array.from({ length: n }, (_, i) => i)
+    const species =
+      Array.isArray(result.species) && result.species.length === s
+        ? result.species
+        : Array.from({ length: s }, (_, i) => `Species ${i + 1}`)
 
     const buffer = decodeBase64ToArrayBuffer(result.biomass_b64)
     const data = new Float32Array(buffer)
@@ -394,26 +377,52 @@ export function MapViewport() {
       latMax: topLeft.lat,
     }
 
-    return { data, steps, h, w, s, bounds }
+    return { data, steps, h, w, s, species, bounds }
   }, [getTileById, routeSimulationId, routeTileId, simulationResultByRecordId])
 
   const biomassOverlay = useMemo<BiomassOverlayFrame | null>(() => {
     if (!biomassBase) return null
-    const frame = findFrameIndex(
-      biomassBase.steps,
-      Math.max(0, Math.floor(simulationStep))
+    const frame = Math.max(
+      0,
+      Math.min(Math.floor(simulationStep), biomassBase.steps.length - 1)
     )
-    return { ...biomassBase, frame }
+    const speciesIndices =
+      selectedSimulationSpecies === null
+        ? Array.from({ length: biomassBase.s }, (_, index) => index)
+        : selectedSimulationSpecies
+            .map((name) => biomassBase.species.indexOf(name))
+            .filter((index) => index >= 0)
+    return { ...biomassBase, frame, speciesIndices }
+  }, [biomassBase, selectedSimulationSpecies, simulationStep])
+
+  const biomassOverlaySummary = useMemo(() => {
+    if (!biomassBase) return null
+    const frameCount = biomassBase.steps.length
+    const currentFrame = Math.max(0, Math.min(Math.floor(simulationStep), frameCount - 1))
+    const currentStep = biomassBase.steps[currentFrame] ?? 0
+    const lastStep = biomassBase.steps[frameCount - 1] ?? currentStep
+    return {
+      frameCount,
+      currentFrame,
+      currentStep,
+      lastStep,
+      speciesCount: biomassBase.s,
+      gridLabel: `${biomassBase.w}x${biomassBase.h}`,
+    }
   }, [biomassBase, simulationStep])
 
   useEffect(() => {
+    const routeZoomKey = routeTileId
+      ? `${routeTileId}:${isSimulationRoute ? "simulation" : "tile"}`
+      : null
+
     if (!routeTileId) {
       lastRouteZoomedTileIdRef.current = null
       return
     }
 
     if (!mapLoaded) return
-    if (lastRouteZoomedTileIdRef.current === routeTileId) return
+    if (lastRouteZoomedTileIdRef.current === routeZoomKey) return
 
     const tile = getTileById(routeTileId)
     if (!tile) return
@@ -434,17 +443,26 @@ export function MapViewport() {
 
     const attemptZoom = () => {
       if (canceled) return
-      if (lastRouteZoomedTileIdRef.current === routeTileId) return
+      if (lastRouteZoomedTileIdRef.current === routeZoomKey) return
       try {
         if (!map.isStyleLoaded?.() || !map.loaded?.()) {
           retryTimer = window.setTimeout(attemptZoom, 120)
           return
         }
+        const container = map.getContainer?.()
+        const containerWidth = container?.clientWidth ?? window.innerWidth
         mapRefValue.fitBounds(bounds, {
-          padding: 80,
+          padding: isSimulationRoute
+            ? {
+                top: 80,
+                right: Math.max(80, Math.floor(containerWidth * 0.24) + 24),
+                bottom: 80,
+                left: 80,
+              }
+            : 80,
           duration: 800,
         })
-        lastRouteZoomedTileIdRef.current = routeTileId
+        lastRouteZoomedTileIdRef.current = routeZoomKey
       } catch (err) {
         retryTimer = window.setTimeout(attemptZoom, 120)
       }
@@ -458,7 +476,7 @@ export function MapViewport() {
         window.clearTimeout(retryTimer)
       }
     }
-  }, [getTileById, mapLoaded, routeTileId])
+  }, [getTileById, isSimulationRoute, mapLoaded, routeTileId])
 
   useEffect(() => {
     if (!isManagementPlanRoute || !routeManagementPlanId) {
@@ -709,12 +727,7 @@ export function MapViewport() {
         ? createBiomassH3HexagonLayer(biomassOverlay, mapViewState.zoom)
         : createBiomassScreenGridLayer(biomassOverlay)
     if (biomassLayer) {
-      layers.push(
-        biomassLayer.clone({
-          // @ts-expect-error MapboxOverlay supports `beforeId` (used when interleaved: true)
-          beforeId: TILE_HIT_AREA_LAYER_ID,
-        })
-      )
+      layers.push(biomassLayer)
     }
 
     return layers
@@ -759,45 +772,13 @@ export function MapViewport() {
     [getTooltipText]
   )
 
-  const overlayProps = useMemo(
-    () => ({
-      interleaved: true,
+  const overlayProps = useMemo(() => {
+    return {
+      interleaved: false,
       layers: deckLayers,
       onHover: onDeckHover,
-    }),
-    [deckLayers, onDeckHover]
-  )
-
-  useEffect(() => {
-    if (!mapLoaded) {
-      setMapStyleReady(false)
-      return
     }
-
-    const map = mapRef.current?.getMap?.()
-    if (!map) {
-      setMapStyleReady(false)
-      return
-    }
-
-    const updateStyleReady = () => {
-      setMapStyleReady(map.isStyleLoaded?.() ?? false)
-    }
-    const markStyleLoading = () => {
-      setMapStyleReady(false)
-    }
-
-    updateStyleReady()
-    map.on("styledataloading", markStyleLoading)
-    map.on("styledata", updateStyleReady)
-    map.on("idle", updateStyleReady)
-
-    return () => {
-      map.off("styledataloading", markStyleLoading)
-      map.off("styledata", updateStyleReady)
-      map.off("idle", updateStyleReady)
-    }
-  }, [mapLoaded])
+  }, [deckLayers, onDeckHover])
 
   useEffect(() => {
     if (!isSimulationRoute) return
@@ -816,15 +797,6 @@ export function MapViewport() {
       easing: (t) => t * t * (3 - 2 * t),
     })
   }, [biomassVisualization, isSimulationRoute, mapLoaded])
-
-  const onBiomassVisualizationChange = useCallback(
-    (value: string) => {
-      if (value === "screenGrid" || value === "h3Hexagon") {
-        setBiomassVisualization(value)
-      }
-    },
-    [setBiomassVisualization]
-  )
 
   const onMove = useCallback((evt: ViewStateChangeEvent) => {
     const vs = evt.viewState
@@ -924,7 +896,8 @@ export function MapViewport() {
     ]
   )
 
-  const mapStyleContent = mapLoaded && mapStyleReady
+  const mapStyleContent = mapLoaded
+  const shouldRenderDeckOverlay = mapLoaded && deckLayers.length > 0
 
   return (
     <div className="absolute inset-0">
@@ -934,7 +907,7 @@ export function MapViewport() {
             ref={mapRef}
             mapboxAccessToken={token}
             mapLib={mapboxgl}
-            projection={{ name: "globe" }}
+            projection="mercator"
             initialViewState={INITIAL_VIEW_STATE}
             onMove={onMove}
             onMouseMove={onTileMouseMove}
@@ -962,8 +935,6 @@ export function MapViewport() {
             style={{ width: "100%", height: "100%" }}
             onLoad={() => {
               setMapLoaded(true)
-              const map = mapRef.current?.getMap?.()
-              setMapStyleReady(map?.isStyleLoaded?.() ?? false)
             }}
             onError={(e: ErrorEvent) => {
               const message = e.error?.message ?? "Map error (check console for details)"
@@ -1125,10 +1096,7 @@ export function MapViewport() {
                   </Source>
                 ) : null}
 
-                <MapboxDeckOverlay
-                  key={overlayProps.interleaved ? "deck-interleaved" : "deck-overlaid"}
-                  {...overlayProps}
-                />
+                {shouldRenderDeckOverlay ? <MapboxDeckOverlay {...overlayProps} /> : null}
               </>
             ) : null}
 
@@ -1150,26 +1118,16 @@ export function MapViewport() {
             </div>
           ) : null}
 
-          {isSimulationRoute ? (
-            <div className="pointer-events-auto absolute left-4 top-4 z-20 rounded-md bg-white/90 px-3 py-2 shadow-sm ring-1 ring-black/10 backdrop-blur">
+          {isSimulationRoute && biomassOverlaySummary ? (
+            <div className="pointer-events-none absolute left-4 top-4 z-20 rounded-md bg-white/90 px-3 py-2 shadow-sm ring-1 ring-black/10 backdrop-blur">
               <div className="text-[11px] font-semibold text-zinc-900">
-                Biomass visualization
+                Biomass loaded
               </div>
-              <div className="mt-1">
-                <Select
-                  value={biomassVisualization}
-                  onValueChange={onBiomassVisualizationChange}
-                >
-                  <SelectTrigger size="sm" className="w-44">
-                    <SelectValue placeholder="Select view" />
-                  </SelectTrigger>
-                  <SelectContent position="popper" align="start">
-                    <SelectGroup>
-                      <SelectItem value="screenGrid">Screen grid</SelectItem>
-                      <SelectItem value="h3Hexagon">Hexagons</SelectItem>
-                    </SelectGroup>
-                  </SelectContent>
-                </Select>
+              <div className="mt-1 text-[10px] leading-4 text-zinc-600">
+                {biomassOverlaySummary.frameCount} frames · {biomassOverlaySummary.speciesCount} species
+                <br />
+                step {biomassOverlaySummary.currentStep} / {biomassOverlaySummary.lastStep} · grid{" "}
+                {biomassOverlaySummary.gridLabel}
               </div>
             </div>
           ) : null}

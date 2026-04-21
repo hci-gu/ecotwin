@@ -9,6 +9,11 @@ export function MapboxDeckOverlay(props: MapboxOverlayProps) {
     overlay.setProps(props)
   }, [overlay, props])
 
+  useEffect(() => {
+    return () => {
+      overlay.finalize()
+    }
+  }, [overlay])
+
   return null
 }
-

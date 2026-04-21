@@ -5,8 +5,11 @@ import (
 	utils "app/lib/utils"
 	"bytes"
 	"database/sql"
+	"encoding/base64"
+	"encoding/binary"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"image/color"
 	"io"
 	"log"
@@ -16,6 +19,7 @@ import (
 	"net/http/httputil"
 	"net/url"
 	"os"
+	"strconv"
 	"strings"
 	"time"
 
@@ -144,6 +148,227 @@ type simulationUploadResponse struct {
 	ID string `json:"id"`
 }
 
+type mockSimulationResponse struct {
+	SimulationID  string   `json:"simulation_id"`
+	WorldSize     int      `json:"world_size"`
+	Species       []string `json:"species"`
+	SampleEvery   int      `json:"sample_every"`
+	IncludeFinal  bool     `json:"include_final"`
+	DType         string   `json:"dtype"`
+	Shape         []int    `json:"shape"`
+	Steps         []int    `json:"steps"`
+	Fitness       float64  `json:"fitness"`
+	EpisodeLength int      `json:"episode_length"`
+	EndReason     string   `json:"end_reason,omitempty"`
+	BiomassB64    string   `json:"biomass_b64"`
+}
+
+type mockAgentSetSummary struct {
+	Name    string   `json:"name"`
+	Kind    string   `json:"kind"`
+	Files   []string `json:"files"`
+	Species []string `json:"species,omitempty"`
+	Error   string   `json:"error,omitempty"`
+}
+
+const (
+	tilePopulationJobsCollection = "tilePopulationJobs"
+
+	tilePopulationKindLandcover = "landcover"
+	tilePopulationKindOceanData = "oceanData"
+
+	tilePopulationJobPending    = "pending"
+	tilePopulationJobProcessing = "processing"
+	tilePopulationJobSucceeded  = "succeeded"
+	tilePopulationJobFailed     = "failed"
+	tilePopulationJobSkipped    = "skipped"
+
+	tileAssetStatusPending    = "pending"
+	tileAssetStatusProcessing = "processing"
+	tileAssetStatusReady      = "ready"
+	tileAssetStatusFailed     = "failed"
+	tileAssetStatusSkipped    = "skipped"
+
+	mockSimulationMaxWorldSize = 24
+	mockSimulationMaxSteps     = 300
+)
+
+func simulationMockEnabled() bool {
+	value := strings.TrimSpace(strings.ToLower(os.Getenv("SIMULATION_MOCK")))
+	switch value {
+	case "1", "true", "yes", "on":
+		return true
+	default:
+		return false
+	}
+}
+
+func newMockSimulationID(seed string) string {
+	if seed = strings.TrimSpace(seed); seed != "" {
+		return fmt.Sprintf("mock-%s-%d", seed, time.Now().UnixNano())
+	}
+	return fmt.Sprintf("mock-%d", time.Now().UnixNano())
+}
+
+func queryInt(query url.Values, names []string, fallback int) int {
+	for _, name := range names {
+		raw := strings.TrimSpace(query.Get(name))
+		if raw == "" {
+			continue
+		}
+		if value, err := strconv.Atoi(raw); err == nil {
+			return value
+		}
+	}
+	return fallback
+}
+
+func queryBool(query url.Values, names []string, fallback bool) bool {
+	for _, name := range names {
+		raw := strings.TrimSpace(strings.ToLower(query.Get(name)))
+		if raw == "" {
+			continue
+		}
+		switch raw {
+		case "1", "true", "yes", "on":
+			return true
+		case "0", "false", "no", "off":
+			return false
+		}
+	}
+	return fallback
+}
+
+func mockSimulationAgents() []mockAgentSetSummary {
+	return []mockAgentSetSummary{
+		{
+			Name:    "mock-default",
+			Kind:    "single",
+			Files:   []string{"10_$cod_9079.34.npy.npz"},
+			Species: []string{"cod"},
+		},
+		{
+			Name: "mock-age3",
+			Kind: "multi",
+			Files: []string{
+				"12_$sprat__a0_14568.62.npy.npz",
+				"12_$sprat__a1_13210.11.npy.npz",
+				"12_$sprat__a2_15100.44.npy.npz",
+				"12_$herring__a0_12001.50.npy.npz",
+				"12_$herring__a1_11888.20.npy.npz",
+				"12_$herring__a2_12555.90.npy.npz",
+				"12_$cod__a0_9800.25.npy.npz",
+				"12_$cod__a1_10010.75.npy.npz",
+				"12_$cod__a2_10333.40.npy.npz",
+			},
+			Species: []string{
+				"sprat__a0", "sprat__a1", "sprat__a2",
+				"herring__a0", "herring__a1", "herring__a2",
+				"cod__a0", "cod__a1", "cod__a2",
+			},
+		},
+		{
+			Name:  "mock-empty",
+			Kind:  "empty",
+			Files: []string{},
+		},
+	}
+}
+
+func buildMockSimulationResponse(simulationID string, query url.Values) ([]byte, string, error) {
+	worldSize := queryInt(query, []string{"worldSize", "world_size"}, 20)
+	if worldSize < 4 {
+		worldSize = 4
+	}
+	if worldSize > mockSimulationMaxWorldSize {
+		worldSize = mockSimulationMaxWorldSize
+	}
+
+	maxSteps := queryInt(query, []string{"maxSteps", "max_steps"}, mockSimulationMaxSteps)
+	if maxSteps < 1 {
+		maxSteps = 1
+	}
+	if maxSteps > mockSimulationMaxSteps {
+		maxSteps = mockSimulationMaxSteps
+	}
+
+	sampleEvery := queryInt(query, []string{"sampleEvery", "sample_every"}, 10)
+	if sampleEvery < 1 {
+		sampleEvery = 1
+	}
+
+	includeFinal := queryBool(query, []string{"includeFinal", "include_final"}, true)
+
+	species := []string{"plankton", "sprat", "herring", "cod"}
+	steps := make([]int, 0, maxSteps/sampleEvery+2)
+	for step := 0; step <= maxSteps; step += sampleEvery {
+		steps = append(steps, step)
+	}
+	if includeFinal && steps[len(steps)-1] != maxSteps {
+		steps = append(steps, maxSteps)
+	}
+	if !includeFinal && len(steps) > 1 && steps[len(steps)-1] == maxSteps {
+		steps = steps[:len(steps)-1]
+	}
+	if len(steps) == 0 {
+		steps = append(steps, 0)
+	}
+
+	snapshotCount := len(steps)
+	totalCells := snapshotCount * worldSize * worldSize * len(species)
+	raw := make([]byte, totalCells*4)
+
+	writeValue := func(offset int, value float32) {
+		binary.LittleEndian.PutUint32(raw[offset:], math.Float32bits(value))
+	}
+
+	offset := 0
+	for tIndex, step := range steps {
+		progress := float64(step) / float64(maxSteps)
+		for y := 0; y < worldSize; y++ {
+			yRatio := float64(y) / float64(worldSize-1)
+			for x := 0; x < worldSize; x++ {
+				xRatio := float64(x) / float64(worldSize-1)
+				spatial := 0.65 + 0.35*math.Sin((xRatio+yRatio+progress)*math.Pi)
+
+				values := []float32{
+					float32(65 + 18*math.Sin(progress*math.Pi*2) + 10*spatial),
+					float32(32 + 10*math.Sin(progress*math.Pi*2+0.8) + 6*spatial),
+					float32(28 + 8*math.Cos(progress*math.Pi*2+0.4) + 5*spatial),
+					float32(18 + 6*math.Cos(progress*math.Pi*1.2) - 4*progress + 3*spatial),
+				}
+
+				for sp := range species {
+					writeValue(offset, values[sp])
+					offset += 4
+				}
+			}
+		}
+		_ = tIndex
+	}
+
+	response := mockSimulationResponse{
+		SimulationID:  simulationID,
+		WorldSize:     worldSize,
+		Species:       species,
+		SampleEvery:   sampleEvery,
+		IncludeFinal:  includeFinal,
+		DType:         "float32",
+		Shape:         []int{snapshotCount, worldSize, worldSize, len(species)},
+		Steps:         steps,
+		Fitness:       float64(maxSteps) * 12.5,
+		EpisodeLength: maxSteps,
+		BiomassB64:    base64.StdEncoding.EncodeToString(raw),
+	}
+
+	body, err := json.Marshal(response)
+	if err != nil {
+		return nil, "", err
+	}
+
+	return body, "application/json", nil
+}
+
 func findOrCreateSimulationRecord(app core.App, simulationId string) (*core.Record, error) {
 	collection, err := app.FindCollectionByNameOrId("simulations")
 	if err != nil {
@@ -211,6 +436,52 @@ func firstNonEmptyString(values ...string) string {
 		}
 	}
 	return ""
+}
+
+func ensureTilePopulationJob(app core.App, tileId string, kind string) error {
+	collection, err := app.FindCollectionByNameOrId(tilePopulationJobsCollection)
+	if err != nil {
+		return err
+	}
+
+	existing, err := app.FindFirstRecordByFilter(
+		tilePopulationJobsCollection,
+		`tile = {:tileId} && kind = {:kind}`,
+		dbx.Params{
+			"tileId": tileId,
+			"kind":   kind,
+		},
+	)
+	if err == nil {
+		if existing.GetString("status") == "" {
+			existing.Set("status", tilePopulationJobPending)
+			return app.Save(existing)
+		}
+
+		return nil
+	}
+
+	if !errors.Is(err, sql.ErrNoRows) {
+		return err
+	}
+
+	job := core.NewRecord(collection)
+	job.Set("tile", tileId)
+	job.Set("kind", kind)
+	job.Set("status", tilePopulationJobPending)
+	job.Set("attemptCount", 0)
+
+	return app.Save(job)
+}
+
+func enqueueTilePopulation(app core.App, tile *core.Record) error {
+	tile.Set("landcoverStatus", tileAssetStatusPending)
+	tile.Set("oceanDataStatus", "")
+	if err := app.Save(tile); err != nil {
+		return err
+	}
+
+	return ensureTilePopulationJob(app, tile.Id, tilePopulationKindLandcover)
 }
 
 func uploadSimulationMap(
@@ -327,6 +598,28 @@ func handleSimulateRunAndCache(
 		}
 	}
 
+	if simulationMockEnabled() {
+		if format != "base64" {
+			return re.BadRequestError("Mock simulation supports only format=base64.", nil)
+		}
+
+		body, mockContentType, err := buildMockSimulationResponse(simulationId, re.Request.URL.Query())
+		if err != nil {
+			return re.InternalServerError("Failed to generate mock simulation response.", err)
+		}
+
+		if record, err := findOrCreateSimulationRecord(app, simulationId); err == nil {
+			if file, fileErr := filesystem.NewFileFromBytes(body, "simulation_result.json"); fileErr == nil {
+				record.Set(fieldName, file)
+				if saveErr := app.Save(record); saveErr != nil {
+					log.Printf("simulate/mock: failed to save cached result for %q: %v", simulationId, saveErr)
+				}
+			}
+		}
+
+		return re.Blob(http.StatusOK, mockContentType, body)
+	}
+
 	// otherwise proxy to upstream and cache the response
 	upURL := *targetURL
 	upURL.Path = "/simulate/" + simulationId
@@ -438,7 +731,11 @@ func main() {
 			return err
 		}
 
-		return app.Save(heightmap)
+		if err := app.Save(heightmap); err != nil {
+			return err
+		}
+
+		return enqueueTilePopulation(app, e.Record)
 	})
 
 	app.OnRecordCreateRequest("landcovers").BindFunc(func(e *core.RecordRequestEvent) error {
@@ -521,17 +818,24 @@ func main() {
 				return re.NotFoundError("Simulation record not found.", err)
 			}
 
-			// Find the tile that references this simulation record (tiles.simulations is a multi-relation).
-			tile, err := app.FindFirstRecordByFilter(
-				"tiles",
-				`simulations.id ?= {:sid}`,
-				dbx.Params{"sid": simRecordId},
-			)
+			planRel := simulation.GetString("plan")
+			if planRel == "" {
+				return re.BadRequestError("Simulation is missing plan relation.", nil)
+			}
+
+			plan, err := app.FindRecordById("managementPlans", planRel)
 			if err != nil {
-				if errors.Is(err, sql.ErrNoRows) {
-					return re.NotFoundError("No tile found for this simulation.", err)
-				}
-				return re.InternalServerError("Failed to resolve tile for simulation.", err)
+				return re.InternalServerError("Failed to load management plan for simulation.", err)
+			}
+
+			tileRel := plan.GetString("tile")
+			if tileRel == "" {
+				return re.BadRequestError("Management plan is missing tile relation.", nil)
+			}
+
+			tile, err := app.FindRecordById("tiles", tileRel)
+			if err != nil {
+				return re.InternalServerError("Failed to load tile for management plan.", err)
 			}
 
 			landcoverRel := tile.GetString("landcover")
@@ -582,6 +886,19 @@ func main() {
 				}
 			}
 
+			if simulationMockEnabled() {
+				simulationID := newMockSimulationID(simRecordId)
+				simulation.Set("simulationId", simulationID)
+				simulation.Set("resultJson", "")
+				simulation.Set("resultNpz", "")
+				if err := app.Save(simulation); err != nil {
+					return re.InternalServerError("Failed to update simulation record with mock simulationId.", err)
+				}
+
+				_ = optionsJSON
+				return handleSimulateRunAndCache(app, httpClient, targetURL, re, simulationID)
+			}
+
 			uploadBody, uploadStatus, uploadContentType, err := uploadSimulationMap(
 				re,
 				httpClient,
@@ -615,6 +932,16 @@ func main() {
 		})
 
 		e.Router.POST("/simulate/upload", func(re *core.RequestEvent) error {
+			if simulationMockEnabled() {
+				body, err := json.Marshal(simulationUploadResponse{
+					ID: newMockSimulationID("upload"),
+				})
+				if err != nil {
+					return re.InternalServerError("Failed to build mock upload response.", err)
+				}
+				return re.Blob(http.StatusOK, "application/json", body)
+			}
+
 			upURL := *targetURL
 			upURL.Path = "/simulate/upload"
 			upURL.RawQuery = re.Request.URL.RawQuery
@@ -657,6 +984,14 @@ func main() {
 		})
 
 		e.Router.GET("/simulate/agents", func(re *core.RequestEvent) error {
+			if simulationMockEnabled() {
+				body, err := json.Marshal(mockSimulationAgents())
+				if err != nil {
+					return re.InternalServerError("Failed to build mock agents response.", err)
+				}
+				return re.Blob(http.StatusOK, "application/json", body)
+			}
+
 			proxy.ServeHTTP(re.Response, re.Request)
 			return nil
 		})

@@ -5,6 +5,7 @@ import type { SimulationResultBase64 } from "@/state/ecotwin-types"
 type BiomassChartProps = {
   result: SimulationResultBase64
   height?: number
+  selectedSpecies?: string[] | null
 }
 
 function decodeBase64ToArrayBuffer(b64: string) {
@@ -32,7 +33,11 @@ const defaultColors = [
   "#f97316", // orange-500
 ]
 
-export function BiomassChart({ result, height = 220 }: BiomassChartProps) {
+export function BiomassChart({
+  result,
+  height = 220,
+  selectedSpecies,
+}: BiomassChartProps) {
   const computed = useMemo(() => {
     const shape = result.shape
     if (!Array.isArray(shape) || shape.length !== 4) return null
@@ -48,10 +53,21 @@ export function BiomassChart({ result, height = 220 }: BiomassChartProps) {
     const data = new Float32Array(buffer)
     const expected = n * h * w * s
     if (data.length < expected) return null
+    const speciesLabels =
+      Array.isArray(result.species) && result.species.length === s
+        ? result.species
+        : Array.from({ length: s }, (_, i) => `Species ${i + 1}`)
+    const selectedIndices =
+      selectedSpecies === null || selectedSpecies === undefined
+        ? Array.from({ length: s }, (_, i) => i)
+        : selectedSpecies
+            .map((name) => speciesLabels.indexOf(name))
+            .filter((index) => index >= 0)
+    const selectedIndexSet = new Set(selectedIndices)
 
     const totals = new Float64Array(n)
     const perSpecies =
-      Array.isArray(result.species) && result.species.length === s
+      speciesLabels.length === s
         ? Array.from({ length: s }, () => new Float64Array(n))
         : null
 
@@ -61,7 +77,7 @@ export function BiomassChart({ result, height = 220 }: BiomassChartProps) {
       for (let cell = 0; cell < h * w; cell++) {
         for (let sp = 0; sp < s; sp++) {
           const v = data[idx++]
-          total += v
+          if (selectedIndexSet.has(sp)) total += v
           if (perSpecies) perSpecies[sp][t] += v
         }
       }
@@ -76,10 +92,10 @@ export function BiomassChart({ result, height = 220 }: BiomassChartProps) {
       },
     ]
 
-    if (perSpecies && s <= 6) {
-      for (let sp = 0; sp < s; sp++) {
+    if (perSpecies && selectedIndices.length <= 6) {
+      for (const sp of selectedIndices) {
         series.push({
-          name: result.species[sp] ?? `Species ${sp + 1}`,
+          name: speciesLabels[sp] ?? `Species ${sp + 1}`,
           color: defaultColors[(sp + 1) % defaultColors.length],
           values: Array.from(perSpecies[sp], (v) => Number(v)),
         })
@@ -99,7 +115,7 @@ export function BiomassChart({ result, height = 220 }: BiomassChartProps) {
     if (yMin === yMax) yMax = yMin + 1
 
     return { steps, series, yMin, yMax }
-  }, [result.biomass_b64, result.shape, result.species, result.steps])
+  }, [result.biomass_b64, result.shape, result.species, result.steps, selectedSpecies])
 
   if (!computed) {
     return (
@@ -272,4 +288,3 @@ export function BiomassChart({ result, height = 220 }: BiomassChartProps) {
     </div>
   )
 }
-
