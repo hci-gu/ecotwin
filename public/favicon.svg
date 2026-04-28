@@ -1,0 +1,5 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" role="img" aria-label="ECOTWIN">
+  <rect width="64" height="64" rx="12" fill="#315d4a"/>
+  <path d="M14 38c7-12 17-18 36-16-6 7-15 11-26 12 6 2 13 2 21 0-8 8-21 11-31 4Z" fill="#d7efe3"/>
+  <circle cx="46" cy="21" r="4" fill="#9bd3c0"/>
+</svg>

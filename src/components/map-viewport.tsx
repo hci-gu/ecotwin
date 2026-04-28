@@ -463,7 +463,7 @@ export function MapViewport() {
           duration: 800,
         })
         lastRouteZoomedTileIdRef.current = routeZoomKey
-      } catch (err) {
+      } catch {
         retryTimer = window.setTimeout(attemptZoom, 120)
       }
     }
@@ -514,7 +514,7 @@ export function MapViewport() {
           duration: 800,
         })
         lastRouteZoomedManagementPlanIdRef.current = routeManagementPlanId
-      } catch (err) {
+      } catch {
         retryTimer = window.setTimeout(attemptZoom, 120)
       }
     }
@@ -602,13 +602,17 @@ export function MapViewport() {
             taskName: task.name || "Untitled activity",
             taskType: task.type,
             areaColor:
-              task.type === "hunting"
-                ? "#ef4444"
-                : task.type === "forestry"
-                  ? "#f59e0b"
-                  : task.type === "infrastructure"
-                    ? "#eab308"
-                    : "#64748b",
+              task.type === "fishing"
+                ? "#0ea5e9"
+                : task.type === "construction"
+                  ? "#f97316"
+                  : task.type === "windFarm"
+                    ? "#22c55e"
+                    : task.type === "seaLane"
+                      ? "#2563eb"
+                      : task.type === "trawlArea"
+                        ? "#e11d48"
+                        : "#64748b",
           },
           geometry,
         }

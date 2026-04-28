@@ -12,24 +12,36 @@ export function hasActiveTileGeneration(tile?: Tile | null) {
 }
 
 export function tilePrimaryStatus(tile?: Tile | null, simulationRunning = false) {
+  if (!tile) {
+    return { label: "Loading tile...", tone: "neutral" as TileStatusTone }
+  }
+
   if (simulationRunning) {
     return { label: "Running...", tone: "warning" as TileStatusTone }
   }
 
-  if (tile?.landcoverStatus === "failed" || tile?.oceanDataStatus === "failed") {
+  if (tile.landcoverStatus === "failed" || tile.oceanDataStatus === "failed") {
     return { label: "Generation failed", tone: "danger" as TileStatusTone }
   }
 
-  if (isPending(tile?.landcoverStatus)) {
+  if (isPending(tile.landcoverStatus)) {
     return { label: "Generating landcover...", tone: "warning" as TileStatusTone }
   }
 
-  if (isPending(tile?.oceanDataStatus)) {
+  if (isPending(tile.oceanDataStatus)) {
     return { label: "Generating ocean data...", tone: "warning" as TileStatusTone }
   }
 
-  if (tile?.oceanDataStatus === "skipped") {
+  if (tile.oceanDataStatus === "skipped") {
     return { label: "Ocean data skipped", tone: "neutral" as TileStatusTone }
+  }
+
+  if (!tile.landcover) {
+    return { label: "Missing landcover", tone: "neutral" as TileStatusTone }
+  }
+
+  if (!tile.oceanData) {
+    return { label: "Missing ocean data", tone: "neutral" as TileStatusTone }
   }
 
   return { label: "Ready to run", tone: "success" as TileStatusTone }

@@ -23,20 +23,20 @@ export function TileList({
   } = useEcotwinState()
 
   return (
-    <>
-      <div className="flex shrink-0 border-b border-black/5 bg-white/40 px-2 pt-2 backdrop-blur-sm">
-        <div className="flex-1 cursor-pointer border-b-2 border-[#3f5a50] py-3 text-center text-sm font-bold text-zinc-900">
-          Tiles
-        </div>
-        <div className="flex-1 cursor-pointer border-b-2 border-transparent py-3 text-center text-sm text-zinc-500 hover:text-zinc-700">
-          (tab item)
+    <div className="flex min-h-0 flex-1 flex-col overflow-hidden">
+      <div className="shrink-0 border-b border-black/5 bg-white/45 px-4 py-3 backdrop-blur-sm">
+        <div className="flex items-baseline justify-between gap-3">
+          <h2 className="text-sm font-semibold text-zinc-950">Tiles</h2>
+          <span className="text-[11px] font-medium text-zinc-500">
+            {tiles?.items.length ?? 0} active
+          </span>
         </div>
       </div>
 
-      <div className="p-4">
-        <h2 className="mb-4 text-sm font-semibold text-zinc-900">
+      <div className="min-h-0 flex-1 overflow-auto p-4">
+        <div className="mb-3 text-[10px] font-bold uppercase tracking-wider text-zinc-400">
           Active tiles
-        </h2>
+        </div>
 
         {tilesError ? (
           <div className="mb-4 rounded-md bg-red-50 p-2 text-xs text-red-600">
@@ -103,6 +103,6 @@ export function TileList({
           {createModeActive ? "Selecting new location..." : "Create Location +"}
         </button>
       </div>
-    </>
+    </div>
   )
 }

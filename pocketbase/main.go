@@ -171,6 +171,51 @@ type mockAgentSetSummary struct {
 	Error   string   `json:"error,omitempty"`
 }
 
+type normalizedActivityInput struct {
+	ID                       string             `json:"id"`
+	Name                     string             `json:"name"`
+	Type                     string             `json:"type"`
+	Timing                   string             `json:"timing,omitempty"`
+	Start                    string             `json:"start,omitempty"`
+	End                      string             `json:"end,omitempty"`
+	TargetScope              string             `json:"targetScope"`
+	Area                     any                `json:"area,omitempty"`
+	AreaSummary              map[string]any     `json:"areaSummary,omitempty"`
+	AffectedAreaKm2          float64            `json:"affectedAreaKm2,omitempty"`
+	AffectedSpecies          []string           `json:"affectedSpecies,omitempty"`
+	SpeciesEffortMultipliers map[string]float64 `json:"speciesEffortMultipliers,omitempty"`
+	Construction             map[string]any     `json:"construction,omitempty"`
+	Parameters               map[string]any     `json:"parameters,omitempty"`
+}
+
+type normalizedSimulationInput struct {
+	Version     int                       `json:"version"`
+	PlanID      string                    `json:"planId"`
+	PlanName    string                    `json:"planName"`
+	TileID      string                    `json:"tileId"`
+	TileName    string                    `json:"tileName"`
+	TileBBox    string                    `json:"tileBbox,omitempty"`
+	TileAreaKm2 float64                   `json:"tileAreaKm2,omitempty"`
+	Activities  []normalizedActivityInput `json:"activities"`
+}
+
+var simulationSpecies = []string{"sprat", "herring", "cod"}
+
+var constructionCategorySet = map[string]bool{
+	"offshorePlatform": true,
+	"cableOrPipeline":  true,
+	"harborWorks":      true,
+	"dredging":         true,
+}
+
+var managementActivityTypeSet = map[string]bool{
+	"fishing":      true,
+	"construction": true,
+	"windFarm":     true,
+	"seaLane":      true,
+	"trawlArea":    true,
+}
+
 const (
 	tilePopulationJobsCollection = "tilePopulationJobs"
 
@@ -436,6 +481,266 @@ func firstNonEmptyString(values ...string) string {
 		}
 	}
 	return ""
+}
+
+func recordValueMap(record *core.Record, field string) map[string]any {
+	value := record.Get(field)
+	if value == nil {
+		return map[string]any{}
+	}
+
+	raw, err := json.Marshal(value)
+	if err != nil {
+		return map[string]any{}
+	}
+
+	var decoded map[string]any
+	if err := json.Unmarshal(raw, &decoded); err != nil {
+		return map[string]any{}
+	}
+
+	return decoded
+}
+
+func optionalMap(value any) map[string]any {
+	if value == nil {
+		return nil
+	}
+	raw, err := json.Marshal(value)
+	if err != nil {
+		return nil
+	}
+	var decoded map[string]any
+	if err := json.Unmarshal(raw, &decoded); err != nil {
+		return nil
+	}
+	return decoded
+}
+
+func parseFloatMap(value any) map[string]float64 {
+	source := optionalMap(value)
+	if source == nil {
+		return nil
+	}
+
+	result := make(map[string]float64, len(source))
+	for key, raw := range source {
+		switch typed := raw.(type) {
+		case float64:
+			result[key] = typed
+		case int:
+			result[key] = float64(typed)
+		case string:
+			if parsed, err := strconv.ParseFloat(strings.TrimSpace(typed), 64); err == nil {
+				result[key] = parsed
+			}
+		}
+	}
+
+	return result
+}
+
+func parseTileBBox(raw string) ([4]float64, bool) {
+	trimmed := strings.TrimSpace(strings.Trim(raw, "[]"))
+	if trimmed == "" {
+		return [4]float64{}, false
+	}
+
+	parts := strings.Split(trimmed, ",")
+	if len(parts) != 4 {
+		return [4]float64{}, false
+	}
+
+	var bbox [4]float64
+	for i, part := range parts {
+		value, err := strconv.ParseFloat(strings.TrimSpace(part), 64)
+		if err != nil || math.IsNaN(value) || math.IsInf(value, 0) {
+			return [4]float64{}, false
+		}
+		bbox[i] = value
+	}
+
+	return bbox, true
+}
+
+func bboxAreaKm2(raw string) float64 {
+	bbox, ok := parseTileBBox(raw)
+	if !ok {
+		return 0
+	}
+
+	const earthRadiusMeters = 6378137.0
+	minLng := bbox[0] * math.Pi / 180
+	minLat := bbox[1] * math.Pi / 180
+	maxLng := bbox[2] * math.Pi / 180
+	maxLat := bbox[3] * math.Pi / 180
+	area := earthRadiusMeters * earthRadiusMeters * math.Abs(maxLng-minLng) * math.Abs(math.Sin(maxLat)-math.Sin(minLat))
+	return area / 1_000_000
+}
+
+func numberFromMap(data map[string]any, key string) (float64, bool) {
+	raw, ok := data[key]
+	if !ok {
+		return 0, false
+	}
+	switch value := raw.(type) {
+	case float64:
+		if math.IsNaN(value) || math.IsInf(value, 0) {
+			return 0, false
+		}
+		return value, true
+	case int:
+		return float64(value), true
+	case string:
+		parsed, err := strconv.ParseFloat(strings.TrimSpace(value), 64)
+		if err != nil || math.IsNaN(parsed) || math.IsInf(parsed, 0) {
+			return 0, false
+		}
+		return parsed, true
+	default:
+		return 0, false
+	}
+}
+
+func requireStringFromMap(data map[string]any, key string) string {
+	value, _ := data[key].(string)
+	return strings.TrimSpace(value)
+}
+
+func buildNormalizedSimulationInput(app core.App, plan *core.Record, tile *core.Record) (*normalizedSimulationInput, error) {
+	taskIds := plan.GetStringSlice("tasks")
+	if len(taskIds) == 0 {
+		return nil, errors.New("management plan has no activities")
+	}
+
+	tileArea := bboxAreaKm2(tile.GetString("bbox"))
+	input := &normalizedSimulationInput{
+		Version:     1,
+		PlanID:      plan.Id,
+		PlanName:    plan.GetString("name"),
+		TileID:      tile.Id,
+		TileName:    tile.GetString("name"),
+		TileBBox:    tile.GetString("bbox"),
+		TileAreaKm2: tileArea,
+		Activities:  make([]normalizedActivityInput, 0, len(taskIds)),
+	}
+
+	for _, taskId := range taskIds {
+		task, err := app.FindRecordById("tasks", taskId)
+		if err != nil {
+			return nil, fmt.Errorf("failed to load activity %s: %w", taskId, err)
+		}
+
+		taskType := task.GetString("type")
+		if !managementActivityTypeSet[taskType] {
+			return nil, fmt.Errorf("activity %q uses unsupported type %q", task.GetString("name"), taskType)
+		}
+
+		data := recordValueMap(task, "data")
+		timing := requireStringFromMap(data, "timing")
+		if timing == "" {
+			if task.GetString("start") == "" && task.GetString("end") == "" {
+				timing = "constant"
+			} else {
+				timing = "scheduled"
+			}
+		}
+		if timing != "scheduled" && timing != "constant" {
+			return nil, fmt.Errorf("activity %q has invalid timing %q", task.GetString("name"), timing)
+		}
+		if timing == "scheduled" && (task.GetString("start") == "" || task.GetString("end") == "") {
+			return nil, fmt.Errorf("scheduled activity %q is missing start or end date", task.GetString("name"))
+		}
+		targetScope := requireStringFromMap(data, "targetScope")
+		if targetScope != "wholeTile" && targetScope != "polygon" {
+			return nil, fmt.Errorf("activity %q is missing targetScope", task.GetString("name"))
+		}
+
+		activity := normalizedActivityInput{
+			ID:          task.Id,
+			Name:        task.GetString("name"),
+			Type:        taskType,
+			Timing:      timing,
+			Start:       task.GetString("start"),
+			End:         task.GetString("end"),
+			TargetScope: targetScope,
+			Parameters:  map[string]any{},
+		}
+
+		if objective := requireStringFromMap(data, "objective"); objective != "" {
+			activity.Parameters["objective"] = objective
+		}
+		if description := requireStringFromMap(data, "description"); description != "" {
+			activity.Parameters["description"] = description
+		}
+		if cost, ok := numberFromMap(data, "cost"); ok {
+			activity.Parameters["cost"] = cost
+		}
+		if revenue, ok := numberFromMap(data, "revenue"); ok {
+			activity.Parameters["revenue"] = revenue
+		}
+
+		if targetScope == "polygon" {
+			area := data["area"]
+			if area == nil {
+				return nil, fmt.Errorf("activity %q is missing polygon area", task.GetString("name"))
+			}
+			activity.Area = area
+			activity.AreaSummary = optionalMap(data["areaSummary"])
+			if areaKm2, ok := numberFromMap(activity.AreaSummary, "areaKm2"); ok {
+				activity.AffectedAreaKm2 = areaKm2
+			}
+		} else {
+			activity.AffectedAreaKm2 = tileArea
+		}
+
+		switch taskType {
+		case "fishing":
+			multipliers := parseFloatMap(data["speciesEffortMultipliers"])
+			if len(multipliers) == 0 {
+				return nil, fmt.Errorf("fishing activity %q is missing species effort multipliers", task.GetString("name"))
+			}
+			for _, species := range simulationSpecies {
+				value, ok := multipliers[species]
+				if !ok || math.IsNaN(value) || math.IsInf(value, 0) || value < 0 {
+					return nil, fmt.Errorf("fishing activity %q has invalid effort multiplier for %s", task.GetString("name"), species)
+				}
+				activity.AffectedSpecies = append(activity.AffectedSpecies, species)
+			}
+			activity.SpeciesEffortMultipliers = multipliers
+		case "construction":
+			construction := optionalMap(data["construction"])
+			category := requireStringFromMap(construction, "category")
+			intensity, ok := numberFromMap(construction, "intensity")
+			if !constructionCategorySet[category] {
+				return nil, fmt.Errorf("construction activity %q has invalid category", task.GetString("name"))
+			}
+			if !ok || intensity < 0 {
+				return nil, fmt.Errorf("construction activity %q has invalid intensity", task.GetString("name"))
+			}
+			activity.Construction = construction
+		}
+
+		input.Activities = append(input.Activities, activity)
+	}
+
+	return input, nil
+}
+
+func mergeSimulationOptions(options any, input *normalizedSimulationInput) ([]byte, error) {
+	merged := map[string]any{}
+	if options != nil {
+		raw, err := json.Marshal(options)
+		if err == nil {
+			_ = json.Unmarshal(raw, &merged)
+		}
+	}
+	if merged == nil {
+		merged = map[string]any{}
+	}
+
+	merged["managementPlan"] = input
+	return json.Marshal(merged)
 }
 
 func ensureTilePopulationJob(app core.App, tileId string, kind string) error {
@@ -878,25 +1183,38 @@ func main() {
 				return re.InternalServerError("Failed to read ocean depth file.", err)
 			}
 
-			options := simulation.Get("options")
-			optionsJSON := []byte("{}")
-			if options != nil {
-				if raw, err := json.Marshal(options); err == nil {
-					optionsJSON = raw
-				}
+			normalizedInput, err := buildNormalizedSimulationInput(app, plan, tile)
+			if err != nil {
+				return re.BadRequestError("Management plan cannot be normalized for simulation: "+err.Error(), err)
+			}
+
+			optionsJSON, err := mergeSimulationOptions(simulation.Get("options"), normalizedInput)
+			if err != nil {
+				return re.InternalServerError("Failed to encode simulation input.", err)
+			}
+
+			simulation.Set("inputJson", normalizedInput)
+			simulation.Set("status", "running")
+			simulation.Set("resultJson", "")
+			simulation.Set("resultNpz", "")
+			if err := app.Save(simulation); err != nil {
+				return re.InternalServerError("Failed to store normalized simulation input.", err)
 			}
 
 			if simulationMockEnabled() {
 				simulationID := newMockSimulationID(simRecordId)
 				simulation.Set("simulationId", simulationID)
-				simulation.Set("resultJson", "")
-				simulation.Set("resultNpz", "")
 				if err := app.Save(simulation); err != nil {
 					return re.InternalServerError("Failed to update simulation record with mock simulationId.", err)
 				}
 
-				_ = optionsJSON
-				return handleSimulateRunAndCache(app, httpClient, targetURL, re, simulationID)
+				if err := handleSimulateRunAndCache(app, httpClient, targetURL, re, simulationID); err != nil {
+					simulation.Set("status", "failed")
+					_ = app.Save(simulation)
+					return err
+				}
+				simulation.Set("status", "completed")
+				return app.Save(simulation)
 			}
 
 			uploadBody, uploadStatus, uploadContentType, err := uploadSimulationMap(
@@ -909,26 +1227,36 @@ func main() {
 				re.Request.URL.RawQuery,
 			)
 			if err != nil {
+				simulation.Set("status", "failed")
+				_ = app.Save(simulation)
 				return re.InternalServerError("Failed to upload map to simulation upstream.", err)
 			}
 			if uploadStatus < 200 || uploadStatus > 299 {
+				simulation.Set("status", "failed")
+				_ = app.Save(simulation)
 				return re.Blob(uploadStatus, uploadContentType, uploadBody)
 			}
 
 			var parsed simulationUploadResponse
 			if err := json.Unmarshal(uploadBody, &parsed); err != nil || parsed.ID == "" {
+				simulation.Set("status", "failed")
+				_ = app.Save(simulation)
 				return re.InternalServerError("Invalid simulation upstream upload response.", err)
 			}
 
-			// store the upstream simulation_id and clear previous cached result files
+			// Store the upstream simulation_id; result files were cleared with the input snapshot.
 			simulation.Set("simulationId", parsed.ID)
-			simulation.Set("resultJson", "")
-			simulation.Set("resultNpz", "")
 			if err := app.Save(simulation); err != nil {
 				return re.InternalServerError("Failed to update simulation record with simulationId.", err)
 			}
 
-			return handleSimulateRunAndCache(app, httpClient, targetURL, re, parsed.ID)
+			if err := handleSimulateRunAndCache(app, httpClient, targetURL, re, parsed.ID); err != nil {
+				simulation.Set("status", "failed")
+				_ = app.Save(simulation)
+				return err
+			}
+			simulation.Set("status", "completed")
+			return app.Save(simulation)
 		})
 
 		e.Router.POST("/simulate/upload", func(re *core.RequestEvent) error {

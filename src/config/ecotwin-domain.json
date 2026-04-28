@@ -1,0 +1,18 @@
+{
+  "species": [
+    { "id": "sprat", "label": "Sprat" },
+    { "id": "herring", "label": "Herring" },
+    { "id": "cod", "label": "Cod" }
+  ],
+  "constructionCategories": [
+    { "id": "offshorePlatform", "label": "Offshore platform" },
+    { "id": "cableOrPipeline", "label": "Cable or pipeline" },
+    { "id": "harborWorks", "label": "Harbor works" },
+    { "id": "dredging", "label": "Dredging" }
+  ],
+  "areaActivityTypes": [
+    { "id": "windFarm", "label": "Wind farm" },
+    { "id": "seaLane", "label": "Sea lane" },
+    { "id": "trawlArea", "label": "Trawl area" }
+  ]
+}

@@ -35,6 +35,7 @@ type TileDetailsProps = {
   status?: string
   statusTone?: TileStatusTone
   createdDate?: string
+  simulationInfoContent?: React.ReactNode
   managementPlansContent?: React.ReactNode
   landcoverContent?: React.ReactNode
   oceanDataContent?: React.ReactNode
@@ -44,7 +45,8 @@ export function TileDetails({
   name,
   status = "Ready to run",
   statusTone = "success",
-  createdDate = "2025-12-12",
+  createdDate = "Unknown date",
+  simulationInfoContent,
   managementPlansContent,
   landcoverContent,
   oceanDataContent,
@@ -76,26 +78,11 @@ export function TileDetails({
 
       {/* Accordions */}
       <div className="divide-y divide-black/5">
-        <Accordion title="Simulation info">
-          <div className="space-y-2 text-xs">
-            <div className="flex justify-between">
-              <span className="text-zinc-500">Area</span>
-              <span className="font-medium text-zinc-900">128km²</span>
-            </div>
-            <div className="flex justify-between">
-              <span className="text-zinc-500">Grid</span>
-              <span className="font-medium text-zinc-900">40x32</span>
-            </div>
-            <div className="flex justify-between">
-              <span className="text-zinc-500">Time step</span>
-              <span className="font-medium text-zinc-900">6 min</span>
-            </div>
-            <div className="flex justify-between">
-              <span className="text-zinc-500">Duration</span>
-              <span className="font-medium text-zinc-900">Jan-Dec 2025</span>
-            </div>
-          </div>
-        </Accordion>
+        {simulationInfoContent && (
+          <Accordion title="Simulation info">
+            <div className="pb-4">{simulationInfoContent}</div>
+          </Accordion>
+        )}
 
         {managementPlansContent && (
           <Accordion title="Management plans" defaultOpen={false}>

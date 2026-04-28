@@ -36,5 +36,6 @@ pocketbase/pocketbase
 pocketbase/app%
 pocketbase/.gocache
 pocketbase/.gomodcache
+services/mock-simulation/data/maps/
 
 service_account.json

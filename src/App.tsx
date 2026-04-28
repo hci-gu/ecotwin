@@ -1,6 +1,7 @@
 import { AppLayout } from "@/layouts/app-layout"
 import { ManagementPlansPage } from "@/pages/management-plans-page"
 import { MapPage } from "@/pages/map-page"
+import { SimulationReportPage } from "@/pages/simulation-report-page"
 import { SimulationsPage } from "@/pages/simulations-page"
 import { TilePage } from "@/pages/tile-page"
 import { Navigate, Route, Routes } from "react-router-dom"
@@ -11,6 +12,7 @@ export function App() {
       <Route element={<AppLayout />}>
         <Route index element={<MapPage />} />
         <Route path="tile/:tileId" element={<TilePage />} />
+        <Route path="tile/:tileId/simulation/:simulationId/report" element={<SimulationReportPage />} />
         <Route path="tile/:tileId/simulation/:simulationId" element={<TilePage />} />
         <Route path="tile/:tileId/management-plan/:planId" element={<TilePage />} />
         <Route path="management-plans" element={<ManagementPlansPage />} />

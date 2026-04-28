@@ -6,7 +6,6 @@ import {
   fileUrl,
   fetchSimAgents,
   fetchSimById,
-  fetchMe,
   fetchSimulationResult,
   getHeightmap,
   getLandcover,
@@ -15,13 +14,10 @@ import {
   getSimulation,
   getTile,
   getTileByXYZ,
-  loginUser,
-  listAllTimesteps,
   listManagementPlans,
   listSimulations,
   listTasks,
   listTiles,
-  logoutUser,
   runSimulationByRecordId,
 } from "@/state/ecotwin-api"
 import type {
@@ -35,8 +31,6 @@ import type {
   SimulationResultBase64,
   Task,
   Tile,
-  Timestep,
-  User,
 } from "@/state/ecotwin-types"
 
 function toError(err: unknown) {
@@ -95,7 +89,7 @@ export const refreshTilesAtom = atom(
           filter: args?.filter,
           expand:
             args?.expand ??
-            "heightmap,landcover,oceanData,simulations,simulations.plan,simulations.plan.tasks",
+            "heightmap,landcover,oceanData",
           fields: args?.fields,
         }
       )
@@ -126,7 +120,7 @@ export const fetchTileByXYZAtom = atom(
 	      const tile = await getTileByXYZ(args.x, args.y, args.zoom, {
 	        expand:
 	          args.expand ??
-	          "heightmap,landcover,oceanData,simulations,simulations.plan,simulations.plan.tasks",
+	          "heightmap,landcover,oceanData",
 	        fields: args.fields,
 	      })
       set(tileByXYZCacheAtom, (prev) => ({ ...prev, [key]: tile }))
@@ -153,7 +147,7 @@ export const fetchTileByIdAtom = atom(null, async (get, set, args: { id: string;
     const tile = await getTile(args.id, {
       expand:
         args.expand ??
-        "heightmap,landcover,oceanData,simulations,simulations.plan,simulations.plan.tasks",
+        "heightmap,landcover,oceanData",
       fields: args.fields,
     })
     const xyzKey = `${tile.zoom}/${tile.x}/${tile.y}`
@@ -231,7 +225,7 @@ export const refreshSimulationsAtom = atom(null, async (get, set) => {
   set(simulationsLoadingAtom, true)
   set(simulationsErrorAtom, null)
   try {
-    const res = await listSimulations({ sort: "-created", expand: "plan,plan.tasks" })
+    const res = await listSimulations({ sort: "-created", expand: "plan,plan.tile,plan.tasks" })
     set(simulationsAtom, res)
   } catch (err) {
     set(simulationsErrorAtom, toError(err))
@@ -256,9 +250,10 @@ export const createSimulationAtom = atom(
     const created = await createSimulationRecord({
       plan: args.planId,
       options: args.options,
+      status: "pending",
     })
     const simulation = await getSimulation(created.id, {
-      expand: "plan,plan.tasks",
+      expand: "plan,plan.tile,plan.tasks",
     })
     set(simulationByIdCacheAtom, (prev) => ({ ...prev, [simulation.id]: simulation }))
     set(simulationsAtom, (prev) => {
@@ -275,7 +270,7 @@ export const fetchSimulationByIdAtom = atom(null, async (get, set, args: { id: s
   set(simulationByIdErrorAtom, null)
   try {
     const sim = await getSimulation(args.id, {
-      expand: args.expand ?? "plan,plan.tasks",
+      expand: args.expand ?? "plan,plan.tile,plan.tasks",
       fields: args.fields,
     })
     set(simulationByIdCacheAtom, (prev) => ({ ...prev, [args.id]: sim }))
@@ -368,31 +363,6 @@ export const refreshTasksAtom = atom(
   }
 )
 
-export const timestepsBySimulationAtom = atom<Record<string, Timestep[]>>({})
-export const timestepsLoadingAtom = atom(false)
-export const timestepsErrorAtom = atom<Error | null>(null)
-export const refreshTimestepsAtom = atom(
-  null,
-  async (get, set, simulationId: string) => {
-    if (get(timestepsLoadingAtom)) return get(timestepsBySimulationAtom)[simulationId]
-    set(timestepsLoadingAtom, true)
-    set(timestepsErrorAtom, null)
-    try {
-      const res = await listAllTimesteps(simulationId, { sort: "index" })
-      set(timestepsBySimulationAtom, (prev) => ({
-        ...prev,
-        [simulationId]: res,
-      }))
-      return res
-    } catch (err) {
-      set(timestepsErrorAtom, toError(err))
-      throw err
-    } finally {
-      set(timestepsLoadingAtom, false)
-    }
-  }
-)
-
 export const simAgentsAtom = atom<SimAgentsResponse | null>(null)
 export const simAgentsLoadingAtom = atom(false)
 export const simAgentsErrorAtom = atom<Error | null>(null)
@@ -456,7 +426,7 @@ export const fetchSimulationResultByRecordIdAtom = atom(
       const sim =
         sims?.find((s) => s.id === simulationRecordId) ??
         get(simulationByIdCacheAtom)[simulationRecordId] ??
-        (await getSimulation(simulationRecordId, { expand: "plan,plan.tasks" }))
+        (await getSimulation(simulationRecordId, { expand: "plan,plan.tile,plan.tasks" }))
 
       if (!args.forceRun && sim.resultJson) {
         const url = fileUrl(sim, sim.resultJson)
@@ -503,7 +473,7 @@ export const fetchSimulationResultByRecordIdAtom = atom(
 
       // Refetch record to pick up cached resultJson/resultNpz filenames.
       const refreshed = await getSimulation(simulationRecordId, {
-        expand: "plan,plan.tasks",
+        expand: "plan,plan.tile,plan.tasks",
       })
       set(simulationByIdCacheAtom, (prev) => ({
         ...prev,
@@ -523,38 +493,6 @@ export const fetchSimulationResultByRecordIdAtom = atom(
     }
   }
 )
-
-export const meAtom = atom<User | null>(null)
-export const meLoadingAtom = atom(false)
-export const meErrorAtom = atom<Error | null>(null)
-
-export const refreshMeAtom = atom(null, async (get, set) => {
-  if (get(meLoadingAtom)) return get(meAtom)
-  set(meLoadingAtom, true)
-  set(meErrorAtom, null)
-  try {
-    const me = await fetchMe()
-    set(meAtom, me)
-  } catch (err) {
-    set(meErrorAtom, toError(err))
-    set(meAtom, null)
-  } finally {
-    set(meLoadingAtom, false)
-  }
-})
-
-export const loginAtom = atom(
-  null,
-  async (_get, set, args: { email: string; password: string }) => {
-    await loginUser(args.email, args.password)
-    await set(refreshMeAtom)
-  }
-)
-
-export const logoutAtom = atom(null, async (_get, set) => {
-  logoutUser()
-  set(meAtom, null)
-})
 
 export const refreshEcotwinStateAtom = atom(null, async (_get, set) => {
   await Promise.all([

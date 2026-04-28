@@ -3,11 +3,6 @@ import { useAtomValue, useSetAtom } from "jotai"
 import {
   hoveredTileIdAtom,
   selectedTileIdAtom,
-  loginAtom,
-  logoutAtom,
-  meAtom,
-  meErrorAtom,
-  meLoadingAtom,
   managementPlansAtom,
   managementPlansErrorAtom,
   managementPlansLoadingAtom,
@@ -38,10 +33,6 @@ export function useEcotwinState() {
   const tilesLoading = useAtomValue(tilesLoadingAtom)
   const tilesError = useAtomValue(tilesErrorAtom)
 
-  const me = useAtomValue(meAtom)
-  const meLoading = useAtomValue(meLoadingAtom)
-  const meError = useAtomValue(meErrorAtom)
-
   const managementPlans = useAtomValue(managementPlansAtom)
   const managementPlansLoading = useAtomValue(managementPlansLoadingAtom)
   const managementPlansError = useAtomValue(managementPlansErrorAtom)
@@ -64,8 +55,6 @@ export function useEcotwinState() {
   const refreshSimAgents = useSetAtom(refreshSimAgentsAtom)
   const refreshManagementPlans = useSetAtom(refreshManagementPlansAtom)
   const refreshTasks = useSetAtom(refreshTasksAtom)
-  const login = useSetAtom(loginAtom)
-  const logout = useSetAtom(logoutAtom)
   const setHoveredTileId = useSetAtom(hoveredTileIdAtom)
   const setSelectedTileId = useSetAtom(selectedTileIdAtom)
 
@@ -77,9 +66,6 @@ export function useEcotwinState() {
     tiles,
     tilesLoading,
     tilesError,
-    me,
-    meLoading,
-    meError,
     managementPlans,
     managementPlansLoading,
     managementPlansError,
@@ -98,7 +84,5 @@ export function useEcotwinState() {
     refreshSimAgents,
     refreshManagementPlans,
     refreshTasks,
-    login,
-    logout,
   }
 }

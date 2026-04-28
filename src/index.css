@@ -151,3 +151,77 @@
     @apply font-sans;
   }
 }
+
+@media print {
+  @page {
+    size: A4;
+    margin: 0;
+  }
+
+  * {
+    print-color-adjust: exact;
+    -webkit-print-color-adjust: exact;
+  }
+
+  html,
+  body,
+  #root {
+    height: auto !important;
+    overflow: visible !important;
+    background: #f5f5f2 !important;
+  }
+
+  body * {
+    visibility: hidden;
+  }
+
+  #root > div {
+    height: auto !important;
+    min-height: auto !important;
+    overflow: visible !important;
+    background: #f5f5f2 !important;
+  }
+
+  .simulation-report-page,
+  .simulation-report-page * {
+    visibility: visible;
+  }
+
+  .simulation-report-page {
+    position: absolute !important;
+    inset: 0 auto auto 0 !important;
+    z-index: 9999 !important;
+    width: 100% !important;
+    min-height: auto !important;
+    overflow: visible !important;
+    background: #f5f5f2 !important;
+    padding: 0 !important;
+  }
+
+  .simulation-report-document {
+    max-width: none !important;
+    border-radius: 0 !important;
+    box-shadow: none !important;
+    background: white !important;
+    padding: 12mm !important;
+  }
+
+  .report-print-hidden {
+    display: none !important;
+  }
+
+  .report-print-break {
+    break-before: page;
+    page-break-before: always;
+  }
+
+  .report-no-break {
+    break-inside: avoid;
+    page-break-inside: avoid;
+  }
+
+  pre {
+    max-height: none !important;
+    white-space: pre-wrap !important;
+  }
+}

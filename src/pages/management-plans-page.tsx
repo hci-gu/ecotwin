@@ -16,6 +16,15 @@ import {
 } from "@/components/ui/select"
 import { Textarea } from "@/components/ui/textarea"
 import {
+  activityTypeOptions as domainActivityTypeOptions,
+  constructionCategories,
+  createDefaultSpeciesEffortMultipliers,
+  getActivityTypeLabel,
+  getConstructionCategoryLabel,
+  isConstantAreaActivityType,
+  marineSpecies,
+} from "@/config/ecotwin-domain"
+import {
   type ActivityAreaPoint,
   isValidActivityArea,
   summarizeActivityArea,
@@ -46,7 +55,7 @@ import {
   activityAreaHoverPointAtom,
   activityAreaPointsAtom,
 } from "@/state/activity-area-state"
-import type { ManagementPlan, Task, TaskData, TaskType, Tile } from "@/state/ecotwin-types"
+import type { ManagementPlan, Task, TaskData, TaskTiming, TaskType, Tile } from "@/state/ecotwin-types"
 import { ArrowLeft01Icon, Cancel01Icon, PencilEdit02Icon } from "@hugeicons/core-free-icons"
 import { HugeiconsIcon } from "@hugeicons/react"
 import { useAtomValue, useSetAtom } from "jotai"
@@ -65,13 +74,6 @@ type PlanRow = {
   statusLabel: string
 }
 
-type FunctionalGroupValue =
-  | "vegetation"
-  | "deer_moose"
-  | "wolf_lynx"
-  | "birds_of_prey"
-  | "rodents_small_mammals"
-
 type CreatePlanFormState = {
   name: string
   tileId: string
@@ -80,33 +82,27 @@ type CreatePlanFormState = {
 type CreateActivityFormState = {
   activityType: TaskType | ""
   activityName: string
+  timingMode: TaskTiming
   startDate: string
   endDate: string
   objective: string
   description: string
   cost: string
   revenue: string
-  targetBiomassChangePct: string
-  affectedFunctionalGroups: FunctionalGroupValue[]
+  targetScope: "wholeTile" | "polygon"
+  speciesEffortMultipliers: Record<string, string>
+  constructionCategory: string
+  constructionIntensity: string
+  constructionDescription: string
 }
 
 const activityTypeOptions: Array<{
-  value: Extract<TaskType, "hunting" | "forestry" | "infrastructure" | "fishing">
+  value: TaskType
   label: string
-}> = [
-  { value: "hunting", label: "Hunting" },
-  { value: "forestry", label: "Forestry" },
-  { value: "infrastructure", label: "Infrastructure" },
-  { value: "fishing", label: "Fishing" },
-]
-
-const functionalGroupOptions: Array<{ value: FunctionalGroupValue; label: string }> = [
-  { value: "vegetation", label: "Vegetation" },
-  { value: "deer_moose", label: "Deer/Moose" },
-  { value: "wolf_lynx", label: "Wolf/Lynx" },
-  { value: "birds_of_prey", label: "Birds of prey" },
-  { value: "rodents_small_mammals", label: "Rodents/Small mammals" },
-]
+}> = domainActivityTypeOptions.map((option) => ({
+  value: option.id as TaskType,
+  label: option.label,
+}))
 
 const TIMELINE_MONTH_LABELS = [
   "Jan",
@@ -136,22 +132,20 @@ type TimelineMonth = {
 }
 
 const activityAccentClasses: Record<string, string> = {
-  hunting: "border-rose-400 bg-rose-50/90",
-  forestry: "border-amber-400 bg-amber-50/90",
-  infrastructure: "border-sky-400 bg-sky-50/90",
   fishing: "border-cyan-400 bg-cyan-50/90",
-  landcover: "border-emerald-400 bg-emerald-50/90",
-  fishingPolicy: "border-violet-400 bg-violet-50/90",
+  construction: "border-orange-400 bg-orange-50/90",
+  windFarm: "border-emerald-400 bg-emerald-50/90",
+  seaLane: "border-blue-400 bg-blue-50/90",
+  trawlArea: "border-rose-400 bg-rose-50/90",
   activity: "border-zinc-300 bg-white/90",
 }
 
 const activityTopBorderClasses: Record<string, string> = {
-  hunting: "border-rose-500",
-  forestry: "border-amber-500",
-  infrastructure: "border-sky-500",
   fishing: "border-cyan-500",
-  landcover: "border-emerald-500",
-  fishingPolicy: "border-violet-500",
+  construction: "border-orange-500",
+  windFarm: "border-emerald-500",
+  seaLane: "border-blue-500",
+  trawlArea: "border-rose-500",
   activity: "border-zinc-400",
 }
 
@@ -166,14 +160,18 @@ function createInitialActivityFormState(): CreateActivityFormState {
   return {
     activityType: "",
     activityName: "",
+    timingMode: "scheduled",
     startDate: "",
     endDate: "",
     objective: "",
     description: "",
     cost: "",
     revenue: "",
-    targetBiomassChangePct: "",
-    affectedFunctionalGroups: ["vegetation"],
+    targetScope: "polygon",
+    speciesEffortMultipliers: createDefaultSpeciesEffortMultipliers(),
+    constructionCategory: constructionCategories[0]?.id ?? "",
+    constructionIntensity: "",
+    constructionDescription: "",
   }
 }
 
@@ -244,6 +242,21 @@ function taskData(task?: Task): TaskData | undefined {
   return value
 }
 
+function getTaskTiming(task?: Task): TaskTiming {
+  const timing = taskData(task)?.timing
+  if (timing === "constant" || timing === "scheduled") return timing
+  return task?.start || task?.end ? "scheduled" : "constant"
+}
+
+function isConstantTask(task?: Task) {
+  return getTaskTiming(task) === "constant"
+}
+
+function formatTaskTiming(task: Task) {
+  if (isConstantTask(task)) return "Constant"
+  return `${formatDate(task.start)} to ${formatDate(task.end)}`
+}
+
 function planLocationName(plan?: ManagementPlan | null) {
   const expandedTile = plan?.expand?.tile
   if (expandedTile?.name?.trim()) return expandedTile.name.trim()
@@ -280,31 +293,55 @@ function extractActivityAreaPoints(value: unknown): ActivityAreaPoint[] {
 
 function createActivityFormFromTask(task: Task): CreateActivityFormState {
   const data = taskData(task)
+  const multipliers = createDefaultSpeciesEffortMultipliers()
+  if (
+    data?.speciesEffortMultipliers &&
+    typeof data.speciesEffortMultipliers === "object"
+  ) {
+    for (const species of marineSpecies) {
+      const value = data.speciesEffortMultipliers[species.id]
+      if (typeof value === "number" && Number.isFinite(value)) {
+        multipliers[species.id] = String(value)
+      }
+    }
+  }
+  const construction =
+    data?.construction && typeof data.construction === "object"
+      ? data.construction
+      : undefined
+
   return {
     activityType: task.type,
     activityName: task.name || "",
+    timingMode: getTaskTiming(task),
     startDate: task.start ? formatDate(task.start) : "",
     endDate: task.end ? formatDate(task.end) : "",
     objective: typeof data?.objective === "string" ? data.objective : "",
     description: typeof data?.description === "string" ? data.description : "",
     cost: typeof data?.cost === "number" ? String(data.cost) : "",
     revenue: typeof data?.revenue === "number" ? String(data.revenue) : "",
-    targetBiomassChangePct:
-      typeof data?.targetBiomassChangePct === "number" ? String(data.targetBiomassChangePct) : "",
-    affectedFunctionalGroups: Array.isArray(data?.affectedFunctionalGroups)
-      ? data.affectedFunctionalGroups.filter(
-          (value): value is FunctionalGroupValue =>
-            typeof value === "string" &&
-            functionalGroupOptions.some((option) => option.value === value)
-        )
-      : ["vegetation"],
+    targetScope:
+      data?.targetScope === "wholeTile" || data?.targetScope === "polygon"
+        ? data.targetScope
+        : data?.area
+          ? "polygon"
+          : "wholeTile",
+    speciesEffortMultipliers: multipliers,
+    constructionCategory:
+      typeof construction?.category === "string"
+        ? construction.category
+        : constructionCategories[0]?.id ?? "",
+    constructionIntensity:
+      typeof construction?.intensity === "number" ? String(construction.intensity) : "",
+    constructionDescription:
+      typeof construction?.description === "string" ? construction.description : "",
   }
 }
 
 function sortTasks(tasks: Task[]) {
   return [...tasks].sort((a, b) => {
-    const left = a.start ?? a.created ?? ""
-    const right = b.start ?? b.created ?? ""
+    const left = isConstantTask(a) ? a.name ?? a.created ?? "" : a.start ?? a.created ?? ""
+    const right = isConstantTask(b) ? b.name ?? b.created ?? "" : b.start ?? b.created ?? ""
     return left.localeCompare(right)
   })
 }
@@ -329,14 +366,22 @@ function sumTaskMetric(tasks: Task[], key: "cost" | "revenue") {
 }
 
 function pickTaskDates(tasks: Task[], fallbackCreated?: string) {
-  const starts = tasks
+  const scheduledTasks = tasks.filter((task) => !isConstantTask(task))
+  const starts = scheduledTasks
     .map((task) => task.start)
     .filter((value): value is string => Boolean(value))
     .sort()
-  const ends = tasks
+  const ends = scheduledTasks
     .map((task) => task.end)
     .filter((value): value is string => Boolean(value))
     .sort()
+
+  if (!starts.length && !ends.length && tasks.some((task) => isConstantTask(task))) {
+    return {
+      startDate: "Constant",
+      endDate: "Constant",
+    }
+  }
 
   return {
     startDate: starts.length ? formatDate(starts[0]) : formatDate(fallbackCreated),
@@ -402,7 +447,8 @@ function buildTimelineMonths(start: Date, end: Date) {
 
 function getTimelineBounds(tasks: Task[], fallbackCreated?: string) {
   const fallback = startOfMonth(parseTaskDate(fallbackCreated))
-  if (!tasks.length) {
+  const scheduledTasks = tasks.filter((task) => !isConstantTask(task))
+  if (!scheduledTasks.length) {
     return {
       start: addMonths(fallback, -TIMELINE_INITIAL_PADDING_MONTHS),
       end: addMonths(fallback, TIMELINE_INITIAL_PADDING_MONTHS),
@@ -411,8 +457,8 @@ function getTimelineBounds(tasks: Task[], fallbackCreated?: string) {
     }
   }
 
-  const starts = tasks.map((task) => startOfMonth(parseTaskDate(task.start ?? task.created, fallback)))
-  const ends = tasks.map((task) =>
+  const starts = scheduledTasks.map((task) => startOfMonth(parseTaskDate(task.start ?? task.created, fallback)))
+  const ends = scheduledTasks.map((task) =>
     startOfMonth(parseTaskDate(task.end ?? task.start ?? task.created, fallback))
   )
   const earliest = starts.reduce((min, current) => (current < min ? current : min), starts[0])
@@ -427,6 +473,13 @@ function getTimelineBounds(tasks: Task[], fallbackCreated?: string) {
 }
 
 function getTaskGridPlacement(task: Task, timelineStart: Date, timelineMonthCount: number) {
+  if (isConstantTask(task)) {
+    return {
+      startCol: 1,
+      span: Math.max(1, timelineMonthCount),
+    }
+  }
+
   const fallback = timelineStart
   const safeStart = startOfMonth(parseTaskDate(task.start ?? task.created, fallback))
   const safeEnd = startOfMonth(parseTaskDate(task.end ?? task.start ?? task.created, safeStart))
@@ -443,17 +496,42 @@ function getTaskGridPlacement(task: Task, timelineStart: Date, timelineMonthCoun
 
 function renderActivitySummary(task: Task) {
   const data = taskData(task)
+  const multiplierLines =
+    task.type === "fishing" && data?.speciesEffortMultipliers
+      ? marineSpecies
+          .map((species) => {
+            const value = data.speciesEffortMultipliers?.[species.id]
+            return typeof value === "number" && Number.isFinite(value)
+              ? `${species.label}: ${value}x effort`
+              : null
+          })
+          .filter((value): value is string => Boolean(value))
+      : []
+  const constructionLines =
+    task.type === "construction" && data?.construction
+      ? [
+          data.construction.category
+            ? `Category: ${getConstructionCategoryLabel(data.construction.category)}`
+            : null,
+          typeof data.construction.intensity === "number"
+            ? `Intensity: ${data.construction.intensity}`
+            : null,
+          data.construction.description ? `Construction: ${data.construction.description}` : null,
+        ].filter((value): value is string => Boolean(value))
+      : []
   const lines = [
+    `Type: ${getActivityTypeLabel(task.type)}`,
+    `Timing: ${formatTaskTiming(task)}`,
     data?.objective ? `Target: ${data.objective}` : null,
     data?.description ? `Details: ${data.description}` : null,
-    typeof data?.targetBiomassChangePct === "number"
-      ? `Target biomass change: ${data.targetBiomassChangePct}%`
-      : null,
+    data?.targetScope === "wholeTile" ? "Area: Whole tile" : null,
+    ...multiplierLines,
+    ...constructionLines,
     typeof data?.cost === "number" ? `Cost: ${formatCurrency(data.cost)} SEK` : null,
     typeof data?.revenue === "number" ? `Revenue: ${formatCurrency(data.revenue)} SEK` : null,
   ].filter((value): value is string => Boolean(value))
 
-  return lines.slice(0, 5)
+  return lines.slice(0, 7)
 }
 
 function formatActivityTarget(task: Task) {
@@ -727,15 +805,6 @@ export function ManagementPlansPage() {
     setCreateActivityForm((prev) => ({ ...prev, [key]: value }))
   }
 
-  function toggleFunctionalGroup(group: FunctionalGroupValue, checked: boolean) {
-    setCreateActivityForm((prev) => ({
-      ...prev,
-      affectedFunctionalGroups: checked
-        ? Array.from(new Set([...prev.affectedFunctionalGroups, group]))
-        : prev.affectedFunctionalGroups.filter((value) => value !== group),
-    }))
-  }
-
   function handleActivityStepOneNext() {
     if (!createActivityForm.activityType) {
       setCreateActivityError("Choose an activity type before continuing.")
@@ -744,6 +813,26 @@ export function ManagementPlansPage() {
 
     if (!createActivityForm.activityName.trim()) {
       setCreateActivityError("Enter an activity name before continuing.")
+      return
+    }
+
+    if (createActivityForm.timingMode === "scheduled") {
+      if (!createActivityForm.startDate || !createActivityForm.endDate) {
+        setCreateActivityError("Set a start and end date, or change timing to Constant.")
+        return
+      }
+      if (createActivityForm.endDate < createActivityForm.startDate) {
+        setCreateActivityError("Set an end date that is on or after the start date.")
+        return
+      }
+    }
+
+    if (createActivityForm.targetScope === "wholeTile") {
+      setCreateActivityError(null)
+      setAreaPoints([])
+      setAreaHoverPoint(null)
+      setActivityAreaStepMode("draw")
+      setCreateActivityStep(3)
       return
     }
 
@@ -810,47 +899,98 @@ export function ManagementPlansPage() {
       setCreateActivityStep(1)
       return
     }
-
-    const activityArea = toActivityAreaGeometry(areaPoints)
-    const activityAreaSummary = summarizeActivityArea(areaPoints)
-    if (!activityArea || !activityAreaSummary) {
-      setCreateActivityError("Draw an activity area on the map before creating the activity.")
-      setCreateActivityStep(2)
-      setAreaDrawingActive(true)
-      return
+    if (createActivityForm.timingMode === "scheduled") {
+      if (!createActivityForm.startDate || !createActivityForm.endDate) {
+        setCreateActivityError("Set a start and end date, or change timing to Constant.")
+        setCreateActivityStep(1)
+        return
+      }
+      if (createActivityForm.endDate < createActivityForm.startDate) {
+        setCreateActivityError("Set an end date that is on or after the start date.")
+        setCreateActivityStep(1)
+        return
+      }
     }
 
     const data: TaskData = {
+      timing: createActivityForm.timingMode,
       status: "Planned",
-      area: activityArea,
-      areaSummary: activityAreaSummary,
+      targetScope: createActivityForm.targetScope,
+    }
+
+    if (createActivityForm.targetScope === "polygon") {
+      const activityArea = toActivityAreaGeometry(areaPoints)
+      const activityAreaSummary = summarizeActivityArea(areaPoints)
+      if (!activityArea || !activityAreaSummary) {
+        setCreateActivityError("Draw an activity area on the map before creating the activity.")
+        setCreateActivityStep(2)
+        setAreaDrawingActive(true)
+        return
+      }
+
+      data.area = activityArea
+      data.areaSummary = activityAreaSummary
     }
 
     const objective = trimToUndefined(createActivityForm.objective)
     const description = trimToUndefined(createActivityForm.description)
     const cost = numberFromInput(createActivityForm.cost)
     const revenue = numberFromInput(createActivityForm.revenue)
-    const targetBiomassChangePct = numberFromInput(createActivityForm.targetBiomassChangePct)
 
     if (objective) data.objective = objective
     if (description) data.description = description
     if (cost !== undefined) data.cost = cost
     if (revenue !== undefined) data.revenue = revenue
-    if (targetBiomassChangePct !== undefined) data.targetBiomassChangePct = targetBiomassChangePct
-    if (createActivityForm.affectedFunctionalGroups.length) {
-      data.affectedFunctionalGroups = createActivityForm.affectedFunctionalGroups
+
+    if (createActivityForm.activityType === "fishing") {
+      const speciesEffortMultipliers: Record<string, number> = {}
+      for (const species of marineSpecies) {
+        const raw = createActivityForm.speciesEffortMultipliers[species.id] ?? ""
+        const value = Number(raw)
+        if (!Number.isFinite(value) || value < 0) {
+          setCreateActivityError(`Enter a non-negative effort multiplier for ${species.label}.`)
+          setCreateActivityStep(3)
+          return
+        }
+        speciesEffortMultipliers[species.id] = value
+      }
+      data.speciesEffortMultipliers = speciesEffortMultipliers
+    }
+
+    if (createActivityForm.activityType === "construction") {
+      const category = createActivityForm.constructionCategory
+      const categoryExists = constructionCategories.some((option) => option.id === category)
+      const intensity = numberFromInput(createActivityForm.constructionIntensity)
+      if (!categoryExists) {
+        setCreateActivityError("Choose a construction category.")
+        setCreateActivityStep(3)
+        return
+      }
+      if (intensity === undefined || intensity < 0) {
+        setCreateActivityError("Enter a non-negative construction intensity.")
+        setCreateActivityStep(3)
+        return
+      }
+      data.construction = {
+        category,
+        intensity,
+      }
+      const constructionDescription = trimToUndefined(createActivityForm.constructionDescription)
+      if (constructionDescription) data.construction.description = constructionDescription
     }
 
     setIsCreatingActivity(true)
     setCreateActivityError(null)
 
     try {
+      const start = createActivityForm.timingMode === "constant" ? "" : createActivityForm.startDate
+      const end = createActivityForm.timingMode === "constant" ? "" : createActivityForm.endDate
       if (editingTask) {
         await updateTask(editingTask.id, {
           name: activityName,
           type: createActivityForm.activityType,
-          start: createActivityForm.startDate || undefined,
-          end: createActivityForm.endDate || undefined,
+          start,
+          end,
           data,
         })
       } else {
@@ -859,8 +999,8 @@ export function ManagementPlansPage() {
           const task = await createTask({
             name: activityName,
             type: createActivityForm.activityType,
-            start: createActivityForm.startDate || undefined,
-            end: createActivityForm.endDate || undefined,
+            start,
+            end,
             data,
           })
           createdTaskId = task.id
@@ -994,27 +1134,6 @@ export function ManagementPlansPage() {
                     >
                       Create New +
                     </Button>
-                    <Button
-                      type="button"
-                      variant="outline"
-                      className="h-8 rounded-md border-zinc-400 bg-transparent px-3 text-[0.8rem] font-medium text-zinc-700 hover:bg-white"
-                    >
-                      Import CSV/ggist
-                    </Button>
-                  </div>
-                </div>
-
-                <div className="border-b border-zinc-200 bg-white/50 px-5 py-2.5">
-                  <div className="flex items-center justify-center gap-8 text-[0.72rem] text-zinc-500">
-                    <button type="button" className="font-semibold text-zinc-900">
-                      Graphs
-                    </button>
-                    <button type="button" className="transition-colors hover:text-zinc-700">
-                      Simulation history
-                    </button>
-                    <button type="button" className="transition-colors hover:text-zinc-700">
-                      Settings
-                    </button>
                   </div>
                 </div>
 
@@ -1078,6 +1197,7 @@ export function ManagementPlansPage() {
                             activityAccentClasses[task.type] ?? activityAccentClasses.activity
                           const topBorderClass =
                             activityTopBorderClasses[task.type] ?? activityTopBorderClasses.activity
+                          const constantTask = isConstantTask(task)
 
                           return (
                             <div key={task.id} className="px-7 py-6">
@@ -1095,41 +1215,90 @@ export function ManagementPlansPage() {
                                       topBorderClass
                                     )}
                                   ></div>
-                                  <div className="flex items-start justify-between gap-4">
-                                    <div className="text-[0.92rem] font-medium text-zinc-900">
-                                      {task.name || "Untitled activity"}
+                                  {constantTask ? (
+                                    <div className="sticky left-1/2 z-10 mx-auto flex w-[min(30rem,calc(100vw-5rem))] -translate-x-1/2 flex-col items-center py-2 text-center">
+                                      <div className="text-[0.92rem] font-medium text-zinc-900">
+                                        {task.name || "Untitled activity"}
+                                      </div>
+                                      <div className="mt-1 text-[0.72rem] text-zinc-500">
+                                        {getActivityTypeLabel(task.type)} · {formatTaskTiming(task)}
+                                      </div>
+
+                                      {targetLine ? (
+                                        <div className="mt-4 text-[0.82rem] text-zinc-700">
+                                          <span className="font-semibold text-zinc-800">Target:</span>{" "}
+                                          {targetLine.replace(/^Target:\s*/, "")}
+                                        </div>
+                                      ) : null}
+
+                                      <div className="mt-4 text-[0.82rem] leading-6 text-zinc-700">
+                                        <div className="font-semibold text-zinc-800">Details:</div>
+                                        {summaryLines.length ? (
+                                          summaryLines
+                                            .filter((line) => !line.startsWith("Target: "))
+                                            .map((line) => <div key={line}>{line}</div>)
+                                        ) : (
+                                          <div className="text-zinc-500">No activity details saved yet.</div>
+                                        )}
+                                      </div>
+
+                                      {typeof data?.status === "string" && data.status.trim() ? (
+                                        <div className="mt-3 text-[0.74rem] text-zinc-500">{data.status}</div>
+                                      ) : null}
+
+                                      <button
+                                        type="button"
+                                        onClick={() => openEditActivity(task)}
+                                        className="mt-4 inline-flex items-center gap-1 rounded-md px-2 py-1 text-[0.72rem] font-medium text-zinc-500 transition-colors hover:bg-zinc-100 hover:text-zinc-900"
+                                      >
+                                        <HugeiconsIcon icon={PencilEdit02Icon} size={14} />
+                                        Edit
+                                      </button>
                                     </div>
-                                    <button
-                                      type="button"
-                                      onClick={() => openEditActivity(task)}
-                                      className="inline-flex items-center gap-1 rounded-md px-2 py-1 text-[0.72rem] font-medium text-zinc-500 transition-colors hover:bg-zinc-100 hover:text-zinc-900"
-                                    >
-                                      <HugeiconsIcon icon={PencilEdit02Icon} size={14} />
-                                      Edit
-                                    </button>
-                                  </div>
+                                  ) : (
+                                    <>
+                                      <div className="flex items-start justify-between gap-4">
+                                        <div>
+                                          <div className="text-[0.92rem] font-medium text-zinc-900">
+                                            {task.name || "Untitled activity"}
+                                          </div>
+                                          <div className="mt-1 text-[0.72rem] text-zinc-500">
+                                            {getActivityTypeLabel(task.type)} · {formatTaskTiming(task)}
+                                          </div>
+                                        </div>
+                                        <button
+                                          type="button"
+                                          onClick={() => openEditActivity(task)}
+                                          className="inline-flex items-center gap-1 rounded-md px-2 py-1 text-[0.72rem] font-medium text-zinc-500 transition-colors hover:bg-zinc-100 hover:text-zinc-900"
+                                        >
+                                          <HugeiconsIcon icon={PencilEdit02Icon} size={14} />
+                                          Edit
+                                        </button>
+                                      </div>
 
-                                  {targetLine ? (
-                                    <div className="mt-4 text-[0.82rem] text-zinc-700">
-                                      <span className="font-semibold text-zinc-800">Target:</span>{" "}
-                                      {targetLine.replace(/^Target:\s*/, "")}
-                                    </div>
-                                  ) : null}
+                                      {targetLine ? (
+                                        <div className="mt-4 text-[0.82rem] text-zinc-700">
+                                          <span className="font-semibold text-zinc-800">Target:</span>{" "}
+                                          {targetLine.replace(/^Target:\s*/, "")}
+                                        </div>
+                                      ) : null}
 
-                                  <div className="mt-4 text-[0.82rem] leading-6 text-zinc-700">
-                                    <div className="font-semibold text-zinc-800">Details:</div>
-                                    {summaryLines.length ? (
-                                      summaryLines
-                                        .filter((line) => !line.startsWith("Target: "))
-                                        .map((line) => <div key={line}>{line}</div>)
-                                    ) : (
-                                      <div className="text-zinc-500">No activity details saved yet.</div>
-                                    )}
-                                  </div>
+                                      <div className="mt-4 text-[0.82rem] leading-6 text-zinc-700">
+                                        <div className="font-semibold text-zinc-800">Details:</div>
+                                        {summaryLines.length ? (
+                                          summaryLines
+                                            .filter((line) => !line.startsWith("Target: "))
+                                            .map((line) => <div key={line}>{line}</div>)
+                                        ) : (
+                                          <div className="text-zinc-500">No activity details saved yet.</div>
+                                        )}
+                                      </div>
 
-                                  {typeof data?.status === "string" && data.status.trim() ? (
-                                    <div className="mt-3 text-[0.74rem] text-zinc-500">{data.status}</div>
-                                  ) : null}
+                                      {typeof data?.status === "string" && data.status.trim() ? (
+                                        <div className="mt-3 text-[0.74rem] text-zinc-500">{data.status}</div>
+                                      ) : null}
+                                    </>
+                                  )}
                                 </div>
                               </div>
                             </div>
@@ -1206,7 +1375,19 @@ export function ManagementPlansPage() {
                   <Select
                     value={createActivityForm.activityType}
                     onValueChange={(value) => {
-                      updateActivityForm("activityType", value as TaskType)
+                      const nextType = value as TaskType
+                      setCreateActivityForm((prev) => {
+                        const timingMode = isConstantAreaActivityType(nextType)
+                          ? "constant"
+                          : prev.timingMode
+                        return {
+                          ...prev,
+                          activityType: nextType,
+                          timingMode,
+                          startDate: timingMode === "constant" ? "" : prev.startDate,
+                          endDate: timingMode === "constant" ? "" : prev.endDate,
+                        }
+                      })
                       setCreateActivityError(null)
                     }}
                   >
@@ -1233,36 +1414,122 @@ export function ManagementPlansPage() {
                       updateActivityForm("activityName", event.target.value)
                       setCreateActivityError(null)
                     }}
-                    placeholder="E.g. Spring hunting season"
+                    placeholder="E.g. Cod fishing effort adjustment"
                     className="h-14 rounded-2xl border-zinc-200 bg-white px-5 text-lg placeholder:text-zinc-400"
                   />
                 </div>
 
-                <div className="grid gap-6 sm:grid-cols-2">
-                  <div>
-                    <label className="mb-3 block text-[1rem] font-medium text-zinc-950">
-                      Start Date
-                    </label>
-                    <Input
-                      type="date"
-                      value={createActivityForm.startDate}
-                      onChange={(event) => updateActivityForm("startDate", event.target.value)}
-                      className="h-14 rounded-2xl border-zinc-200 bg-white px-5 text-lg"
-                    />
-                  </div>
-
-                  <div>
-                    <label className="mb-3 block text-[1rem] font-medium text-zinc-950">
-                      End Date
-                    </label>
-                    <Input
-                      type="date"
-                      value={createActivityForm.endDate}
-                      onChange={(event) => updateActivityForm("endDate", event.target.value)}
-                      className="h-14 rounded-2xl border-zinc-200 bg-white px-5 text-lg"
-                    />
+                <div>
+                  <label className="mb-3 block text-[1rem] font-medium text-zinc-950">
+                    Target scope
+                  </label>
+                  <div className="grid gap-3 sm:grid-cols-2">
+                    {[
+                      {
+                        value: "polygon",
+                        label: "Selected area",
+                        description: "Draw an activity polygon on the map.",
+                      },
+                      {
+                        value: "wholeTile",
+                        label: "Whole tile",
+                        description: "Apply the activity to the full tile.",
+                      },
+                    ].map((option) => (
+                      <button
+                        key={option.value}
+                        type="button"
+                        onClick={() =>
+                          updateActivityForm(
+                            "targetScope",
+                            option.value as CreateActivityFormState["targetScope"]
+                          )
+                        }
+                        className={cn(
+                          "rounded-2xl border px-4 py-3 text-left transition-colors",
+                          createActivityForm.targetScope === option.value
+                            ? "border-[#4f7865] bg-[#eef5f0] text-zinc-950"
+                            : "border-zinc-200 bg-white text-zinc-700 hover:bg-zinc-50"
+                        )}
+                      >
+                        <div className="text-sm font-semibold">{option.label}</div>
+                        <div className="mt-1 text-xs text-zinc-500">{option.description}</div>
+                      </button>
+                    ))}
                   </div>
                 </div>
+
+                <div>
+                  <label className="mb-3 block text-[1rem] font-medium text-zinc-950">
+                    Timing
+                  </label>
+                  <div className="grid gap-3 sm:grid-cols-2">
+                    {[
+                      {
+                        value: "scheduled",
+                        label: "Scheduled",
+                        description: "Uses start and end dates.",
+                      },
+                      {
+                        value: "constant",
+                        label: "Constant",
+                        description: "Persistent area without dates.",
+                      },
+                    ].map((option) => (
+                      <button
+                        key={option.value}
+                        type="button"
+                        onClick={() => {
+                          const timingMode = option.value as TaskTiming
+                          setCreateActivityForm((prev) => ({
+                            ...prev,
+                            timingMode,
+                            startDate: timingMode === "constant" ? "" : prev.startDate,
+                            endDate: timingMode === "constant" ? "" : prev.endDate,
+                          }))
+                          setCreateActivityError(null)
+                        }}
+                        className={cn(
+                          "rounded-2xl border px-4 py-3 text-left transition-colors",
+                          createActivityForm.timingMode === option.value
+                            ? "border-[#4f7865] bg-[#eef5f0] text-zinc-950"
+                            : "border-zinc-200 bg-white text-zinc-700 hover:bg-zinc-50"
+                        )}
+                      >
+                        <div className="text-sm font-semibold">{option.label}</div>
+                        <div className="mt-1 text-xs text-zinc-500">{option.description}</div>
+                      </button>
+                    ))}
+                  </div>
+                </div>
+
+                {createActivityForm.timingMode === "scheduled" ? (
+                  <div className="grid gap-6 sm:grid-cols-2">
+                    <div>
+                      <label className="mb-3 block text-[1rem] font-medium text-zinc-950">
+                        Start Date
+                      </label>
+                      <Input
+                        type="date"
+                        value={createActivityForm.startDate}
+                        onChange={(event) => updateActivityForm("startDate", event.target.value)}
+                        className="h-14 rounded-2xl border-zinc-200 bg-white px-5 text-lg"
+                      />
+                    </div>
+
+                    <div>
+                      <label className="mb-3 block text-[1rem] font-medium text-zinc-950">
+                        End Date
+                      </label>
+                      <Input
+                        type="date"
+                        value={createActivityForm.endDate}
+                        onChange={(event) => updateActivityForm("endDate", event.target.value)}
+                        className="h-14 rounded-2xl border-zinc-200 bg-white px-5 text-lg"
+                      />
+                    </div>
+                  </div>
+                ) : null}
               </div>
 
               <div className="mt-14 flex items-center justify-between gap-4">
@@ -1275,7 +1542,11 @@ export function ManagementPlansPage() {
                   onClick={handleActivityStepOneNext}
                   className="h-14 rounded-2xl bg-[#4f7865] px-7 text-[1.05rem] font-medium text-white hover:bg-[#456b5a]"
                 >
-                  {isEditingActivity ? "Next: Edit Area" : "Next: Select Area"}
+                  {createActivityForm.targetScope === "wholeTile"
+                    ? "Next: Details"
+                    : isEditingActivity
+                      ? "Next: Edit Area"
+                      : "Next: Select Area"}
                 </Button>
               </div>
             </div>
@@ -1459,14 +1730,14 @@ export function ManagementPlansPage() {
                       <Input
                         value={createActivityForm.objective}
                         onChange={(event) => updateActivityForm("objective", event.target.value)}
-                        placeholder="E.g. deer/moose population control"
+                        placeholder="E.g. reduce fishing pressure on cod"
                         className="h-14 rounded-2xl border-zinc-200 bg-white px-5 text-lg placeholder:text-zinc-400"
                       />
                     </div>
 
                     <div>
                       <label className="mb-3 block text-[1rem] font-medium text-zinc-950">
-                        Label Text
+                        Description
                       </label>
                       <Textarea
                         value={createActivityForm.description}
@@ -1507,47 +1778,96 @@ export function ManagementPlansPage() {
                       </div>
                     </div>
 
-                    <div className="lg:col-span-2">
-                      <div className="text-[1rem] font-medium text-zinc-950">Ecological impact</div>
-                      <div className="mt-4 max-w-[46rem]">
-                        <label className="mb-3 block text-[1rem] font-medium text-zinc-950">
-                          Target biomass change (%)
-                        </label>
-                        <Input
-                          value={createActivityForm.targetBiomassChangePct}
-                          onChange={(event) =>
-                            updateActivityForm("targetBiomassChangePct", event.target.value)
-                          }
-                          inputMode="decimal"
-                          placeholder="0"
-                          className="h-14 rounded-2xl border-zinc-200 bg-white px-5 text-lg placeholder:text-slate-400"
-                        />
+                    {createActivityForm.activityType === "fishing" ? (
+                      <div className="lg:col-span-2">
+                        <div className="text-[1rem] font-medium text-zinc-950">
+                          Fishing effort multipliers
+                        </div>
+                        <div className="mt-5 grid gap-5 sm:grid-cols-2 xl:grid-cols-3">
+                          {marineSpecies.map((species) => (
+                            <div key={species.id}>
+                              <label className="mb-2 block text-sm font-medium text-zinc-800">
+                                {species.label}
+                              </label>
+                              <Input
+                                value={createActivityForm.speciesEffortMultipliers[species.id] ?? "1.0"}
+                                onChange={(event) =>
+                                  setCreateActivityForm((prev) => ({
+                                    ...prev,
+                                    speciesEffortMultipliers: {
+                                      ...prev.speciesEffortMultipliers,
+                                      [species.id]: event.target.value,
+                                    },
+                                  }))
+                                }
+                                inputMode="decimal"
+                                placeholder="1.0"
+                                className="h-12 rounded-2xl border-zinc-200 bg-white px-5 text-base placeholder:text-slate-400"
+                              />
+                            </div>
+                          ))}
+                        </div>
                       </div>
-                    </div>
+                    ) : null}
 
-                    <div className="lg:col-span-2">
-                      <div className="text-[1rem] font-medium text-zinc-950">
-                        Affected Functional Groups
-                      </div>
-                      <div className="mt-5 grid gap-x-10 gap-y-6 sm:grid-cols-2 xl:grid-cols-4">
-                        {functionalGroupOptions.map((option) => (
-                          <label
-                            key={option.value}
-                            className="flex items-center gap-4 text-[1rem] text-zinc-950"
-                          >
-                            <input
-                              type="checkbox"
-                              checked={createActivityForm.affectedFunctionalGroups.includes(option.value)}
-                              onChange={(event) =>
-                                toggleFunctionalGroup(option.value, event.target.checked)
+                    {createActivityForm.activityType === "construction" ? (
+                      <div className="lg:col-span-2">
+                        <div className="text-[1rem] font-medium text-zinc-950">
+                          Construction parameters
+                        </div>
+                        <div className="mt-5 grid gap-6 lg:grid-cols-2">
+                          <div>
+                            <label className="mb-3 block text-[1rem] font-medium text-zinc-950">
+                              Category
+                            </label>
+                            <Select
+                              value={createActivityForm.constructionCategory}
+                              onValueChange={(value) =>
+                                updateActivityForm("constructionCategory", value)
                               }
-                              className="size-8 rounded-md border border-zinc-300 accent-[#1f2a44]"
+                            >
+                              <SelectTrigger className="h-14 w-full rounded-2xl border-zinc-200 bg-white px-5 text-lg text-zinc-900">
+                                <SelectValue placeholder="Select category..." />
+                              </SelectTrigger>
+                              <SelectContent>
+                                {constructionCategories.map((category) => (
+                                  <SelectItem key={category.id} value={category.id}>
+                                    {category.label}
+                                  </SelectItem>
+                                ))}
+                              </SelectContent>
+                            </Select>
+                          </div>
+                          <div>
+                            <label className="mb-3 block text-[1rem] font-medium text-zinc-950">
+                              Intensity
+                            </label>
+                            <Input
+                              value={createActivityForm.constructionIntensity}
+                              onChange={(event) =>
+                                updateActivityForm("constructionIntensity", event.target.value)
+                              }
+                              inputMode="decimal"
+                              placeholder="0"
+                              className="h-14 rounded-2xl border-zinc-200 bg-white px-5 text-lg placeholder:text-slate-400"
                             />
-                            <span>{option.label}</span>
-                          </label>
-                        ))}
+                          </div>
+                          <div className="lg:col-span-2">
+                            <label className="mb-3 block text-[1rem] font-medium text-zinc-950">
+                              Construction description
+                            </label>
+                            <Textarea
+                              value={createActivityForm.constructionDescription}
+                              onChange={(event) =>
+                                updateActivityForm("constructionDescription", event.target.value)
+                              }
+                              placeholder="Describe the construction pressure or mitigation context..."
+                              className="min-h-28 rounded-2xl border-zinc-200 bg-white px-5 py-4 text-lg placeholder:text-slate-400"
+                            />
+                          </div>
+                        </div>
                       </div>
-                    </div>
+                    ) : null}
                   </div>
                 </div>
 
@@ -1557,7 +1877,7 @@ export function ManagementPlansPage() {
                     variant="ghost"
                     onClick={() => {
                       setCreateActivityError(null)
-                      setCreateActivityStep(2)
+                      setCreateActivityStep(createActivityForm.targetScope === "wholeTile" ? 1 : 2)
                     }}
                     className="h-auto px-0 text-[1.1rem] font-medium text-zinc-700 hover:bg-transparent hover:text-zinc-950"
                   >
@@ -1690,13 +2010,6 @@ export function ManagementPlansPage() {
               className="h-9 rounded-lg bg-black px-4 text-sm font-medium text-white hover:bg-black/90"
             >
               Create New +
-            </Button>
-            <Button
-              type="button"
-              variant="outline"
-              className="h-9 rounded-lg border-zinc-300 bg-transparent px-4 text-sm font-medium text-zinc-700 hover:bg-white"
-            >
-              Import CSV/agist
             </Button>
             {filteredLocation ? (
               <Button

@@ -33,8 +33,16 @@ import { useNavigate } from "react-router-dom"
 import { GlassPane } from "@/components/glass-pane"
 import { ActionsPane } from "@/components/actions-pane"
 import { TileDetails } from "@/components/tile-details"
+import { DetailRows } from "@/components/detail-rows"
 import { HugeiconsIcon } from "@hugeicons/react"
 import { ArrowDown01Icon } from "@hugeicons/core-free-icons"
+import {
+  formatArea,
+  formatAssetStatus,
+  formatMetersPerPixel,
+  tileAreaKm2,
+  type DetailRow,
+} from "@/lib/tile-metrics"
 
 function isPreviewableImage(filename: string) {
   const lower = filename.toLowerCase()
@@ -56,6 +64,8 @@ export function MapPage() {
     selectedTileId,
     setSelectedTileId,
     tiles,
+    managementPlans,
+    simulations,
     refreshTiles,
   } = useEcotwinState()
 
@@ -115,6 +125,56 @@ export function MapPage() {
       .sort((a, b) => (b.num ?? -Infinity) - (a.num ?? -Infinity))
     return entries
   }, [selectedLandcover?.coverage])
+
+  const selectedTilePlanIds = useMemo(() => {
+    if (!selectedTile?.id) return new Set<string>()
+    return new Set(
+      (managementPlans ?? [])
+        .filter(
+          (plan) =>
+            plan.tile === selectedTile.id || plan.expand?.tile?.id === selectedTile.id
+        )
+        .map((plan) => plan.id)
+    )
+  }, [managementPlans, selectedTile?.id])
+
+  const selectedTileSimulationCount = useMemo(() => {
+    if (!selectedTilePlanIds.size) return 0
+    return (simulations ?? []).filter((simulation) => {
+      const planId = simulation.expand?.plan?.id ?? simulation.plan
+      return !!planId && selectedTilePlanIds.has(planId)
+    }).length
+  }, [selectedTilePlanIds, simulations])
+
+  const selectedTileDetailRows = useMemo<DetailRow[]>(() => {
+    if (!selectedTile) return []
+
+    return [
+      formatArea(tileAreaKm2(selectedTile))
+        ? { label: "Area", value: formatArea(tileAreaKm2(selectedTile))! }
+        : null,
+      formatMetersPerPixel(selectedTile.metersPerPixel)
+        ? {
+            label: "Resolution",
+            value: formatMetersPerPixel(selectedTile.metersPerPixel)!,
+          }
+        : null,
+      {
+        label: "Landcover",
+        value:
+          formatAssetStatus(selectedTile.landcoverStatus, Boolean(selectedTile.landcover)) ??
+          "Not linked",
+      },
+      {
+        label: "Ocean data",
+        value:
+          formatAssetStatus(selectedTile.oceanDataStatus, Boolean(selectedTile.oceanData)) ??
+          "Not linked",
+      },
+      { label: "Management plans", value: String(selectedTilePlanIds.size) },
+      { label: "Simulations", value: String(selectedTileSimulationCount) },
+    ].filter((row): row is DetailRow => Boolean(row))
+  }, [selectedTile, selectedTilePlanIds.size, selectedTileSimulationCount])
 
   const clearOverlay = () => setHoveredTileImageOverlay(null)
 
@@ -245,14 +305,19 @@ export function MapPage() {
   return (
     <>
         <LeftPane>
-          <GlassPane className="flex flex-col overflow-auto [scrollbar-gutter:stable]">
+          <GlassPane className="flex flex-col overflow-hidden">
             <TileList
               selectedTileId={selectedTileId}
               createModeActive={tileCreationMode}
               onCreateLocationClick={handleToggleCreateLocationMode}
             />
           </GlassPane>
-          {selectedTileId && <ActionsPane className="animate-in slide-in-from-left-4 fade-in duration-300 shrink-0" />}
+          {selectedTile ? (
+            <ActionsPane
+              className="animate-in slide-in-from-left-4 fade-in duration-300 shrink-0"
+              onEdit={() => navigate(`/tile/${selectedTile.id}`)}
+            />
+          ) : null}
         </LeftPane>
 
       {selectedTileId ? (
@@ -282,7 +347,8 @@ export function MapPage() {
               name={selectedTile?.name || "Untitled tile"} 
               status={tileStatus.label}
               statusTone={tileStatus.tone}
-              createdDate={selectedTile?.created?.substring(0, 10) || "2025-12-12"}
+              createdDate={selectedTile?.created?.substring(0, 10) || "Unknown date"}
+              simulationInfoContent={<DetailRows rows={selectedTileDetailRows} />}
               landcoverContent={
                 <div>
                   {!selectedTile?.landcover ? (

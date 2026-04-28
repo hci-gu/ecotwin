@@ -53,6 +53,8 @@ const isMainModule =
 
 const baseSpecies = ["sprat", "herring", "cod"] as const
 const mockSimulationMaxSteps = 300
+const mockRunMinDelayMs = 1000
+const mockRunMaxDelayMs = 5000
 
 const agentSets: AgentSetSummary[] = [
   {
@@ -219,10 +221,79 @@ function clamp01(value: number) {
   return Math.max(0, Math.min(1, value))
 }
 
+function sleep(ms: number) {
+  return new Promise((resolve) => setTimeout(resolve, ms))
+}
+
+function randomRunDelayMs() {
+  return mockRunMinDelayMs + Math.floor(Math.random() * (mockRunMaxDelayMs - mockRunMinDelayMs + 1))
+}
+
 function gaussian2d(x: number, y: number, centerX: number, centerY: number, spread: number) {
   const dx = x - centerX
   const dy = y - centerY
   return Math.exp(-(dx * dx + dy * dy) / Math.max(0.0001, spread))
+}
+
+function hashString(value: string) {
+  let hash = 2166136261
+  for (let index = 0; index < value.length; index++) {
+    hash ^= value.charCodeAt(index)
+    hash = Math.imul(hash, 16777619)
+  }
+  return hash >>> 0
+}
+
+function createSeededRandom(seed: string) {
+  let state = hashString(seed) || 0x9e3779b9
+  return () => {
+    state = (state + 0x6d2b79f5) >>> 0
+    let value = state
+    value = Math.imul(value ^ (value >>> 15), value | 1)
+    value ^= value + Math.imul(value ^ (value >>> 7), value | 61)
+    return ((value ^ (value >>> 14)) >>> 0) / 4294967296
+  }
+}
+
+type RandomPatch = {
+  speciesIndex: number
+  x: number
+  y: number
+  spread: number
+  strength: number
+  drift: number
+  phase: number
+}
+
+function buildRandomVariation(seed: string, speciesCount: number) {
+  const random = createSeededRandom(seed)
+  const speciesWeights = Array.from(
+    { length: speciesCount },
+    () => 0.86 + random() * 0.32
+  )
+  const speciesPhases = Array.from(
+    { length: speciesCount },
+    () => random() * Math.PI * 2
+  )
+  const patchCount = Math.max(6, speciesCount * 3)
+  const patches: RandomPatch[] = Array.from({ length: patchCount }, () => ({
+    speciesIndex: Math.floor(random() * speciesCount),
+    x: random() * 1.9 - 0.95,
+    y: random() * 1.9 - 0.95,
+    spread: 0.035 + random() * 0.16,
+    strength: (random() - 0.35) * 0.55,
+    drift: 0.03 + random() * 0.12,
+    phase: random() * Math.PI * 2,
+  }))
+
+  return {
+    speciesWeights,
+    speciesPhases,
+    patches,
+    noiseX: 2.2 + random() * 5.5,
+    noiseY: 2.2 + random() * 5.5,
+    noiseSpeed: 0.4 + random() * 1.2,
+  }
 }
 
 function habitatMask(x: number, y: number, progress: number) {
@@ -244,13 +315,75 @@ function speciesCenter(speciesIndex: number, speciesCount: number, progress: num
   }
 }
 
+function speciesKey(label: string) {
+  return label.split("__")[0]
+}
+
+function managementActivityOptions(options: Record<string, unknown>) {
+  const plan = toObject(options.managementPlan)
+  const activities = Array.isArray(plan.activities) ? plan.activities : []
+  const fishingMultipliers = new Map<string, number>()
+  let constructionPressure = 0
+  let constantAreaPressure = 0
+
+  for (const activityValue of activities) {
+    const activity = toObject(activityValue)
+    if (activity.type === "fishing") {
+      const multipliers = toObject(activity.speciesEffortMultipliers)
+      for (const [key, value] of Object.entries(multipliers)) {
+        const parsed =
+          typeof value === "number"
+            ? value
+            : typeof value === "string"
+              ? Number(value)
+              : Number.NaN
+        if (Number.isFinite(parsed) && parsed >= 0) {
+          fishingMultipliers.set(key, parsed)
+        }
+      }
+    }
+
+    if (activity.type === "construction") {
+      const construction = toObject(activity.construction)
+      const intensity =
+        typeof construction.intensity === "number"
+          ? construction.intensity
+          : typeof construction.intensity === "string"
+            ? Number(construction.intensity)
+            : 0
+      if (Number.isFinite(intensity) && intensity > 0) {
+        constructionPressure += Math.min(0.45, intensity / 100)
+      }
+    }
+
+    if (activity.type === "windFarm") {
+      constantAreaPressure += 0.12
+    }
+    if (activity.type === "seaLane") {
+      constantAreaPressure += 0.08
+    }
+    if (activity.type === "trawlArea") {
+      constantAreaPressure += 0.2
+    }
+  }
+
+  return {
+    fishingMultipliers,
+    constructionPressure: Math.min(0.7, constructionPressure + constantAreaPressure),
+  }
+}
+
 function buildBiomassData(
   steps: number[],
   worldSize: number,
   species: string[],
-  maxSteps: number
+  maxSteps: number,
+  options: Record<string, unknown>,
+  seed: string
 ) {
   const values = new Float32Array(steps.length * worldSize * worldSize * species.length)
+  const management = managementActivityOptions(options)
+  const variation = buildRandomVariation(seed, species.length)
   let index = 0
 
   for (const step of steps) {
@@ -282,8 +415,29 @@ function buildBiomassData(
           )
           const seasonal = 0.72 + 0.28 * Math.sin(progress * Math.PI * 2 + speciesIndex * 0.55)
           const speciesWeight = speciesIndex === 0 ? 1.35 : Math.max(0.4, 1.08 - speciesIndex * 0.07)
+          const spatialNoise =
+            0.9 +
+            0.16 *
+              Math.sin(
+                nx * variation.noiseX +
+                  ny * variation.noiseY +
+                  progress * variation.noiseSpeed * Math.PI * 2 +
+                  variation.speciesPhases[speciesIndex]
+              )
+          let patchSignal = 0
+          for (const patch of variation.patches) {
+            if (patch.speciesIndex !== speciesIndex) continue
+            const driftX = patch.x + Math.sin(progress * Math.PI * 2 + patch.phase) * patch.drift
+            const driftY = patch.y + Math.cos(progress * Math.PI * 1.6 + patch.phase) * patch.drift
+            patchSignal += gaussian2d(nx, ny, driftX, driftY, patch.spread) * patch.strength
+          }
           const signal =
-            (plume * 1.25 + wake * 0.6 + eddy * 0.35) * seasonal * speciesWeight * mask
+            ((plume * 1.25 + wake * 0.6 + eddy * 0.35) * spatialNoise +
+              patchSignal) *
+            seasonal *
+            speciesWeight *
+            variation.speciesWeights[speciesIndex] *
+            mask
 
           if (signal < 0.12 || mask < 0.08) {
             values[index++] = 0
@@ -291,7 +445,16 @@ function buildBiomassData(
           }
 
           const amplitude = speciesIndex === 0 ? 125 : 78 - speciesIndex * 4.5
-          values[index++] = Math.max(0, amplitude * signal)
+          const effort = management.fishingMultipliers.get(speciesKey(species[speciesIndex])) ?? 1
+          const fishingEffect =
+            effort >= 1
+              ? Math.max(0.08, 1 - (effort - 1) * 0.45 * progress)
+              : 1 + (1 - effort) * 0.25 * progress
+          const constructionEffect = Math.max(
+            0.05,
+            1 - management.constructionPressure * progress * (0.8 + mask * 0.2)
+          )
+          values[index++] = Math.max(0, amplitude * signal * fishingEffect * constructionEffect)
         }
       }
     }
@@ -335,7 +498,14 @@ function simulationResponse(
   )
   const species = buildOutputSpecies(ageGroups)
   const steps = buildSteps(maxSteps, sampleEvery, includeFinal)
-  const biomass = buildBiomassData(steps, worldSize, species, maxSteps)
+  const biomass = buildBiomassData(
+    steps,
+    worldSize,
+    species,
+    maxSteps,
+    options,
+    `${simulationId}:${stored.createdAt}:${JSON.stringify(options.managementPlan ?? {})}`
+  )
 
   return {
     simulation_id: simulationId,
@@ -572,6 +742,7 @@ async function handleUpload(request: Request) {
 async function handleRun(simulationId: string, url: URL) {
   try {
     const metadata = await readSimulation(simulationId)
+    await sleep(randomRunDelayMs())
     const result = simulationResponse(simulationId, url.searchParams, metadata)
     const biomass = decodeBase64Float32(result.biomass_b64)
     const format = (url.searchParams.get("format") ?? "base64").toLowerCase()

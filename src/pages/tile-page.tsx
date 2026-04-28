@@ -7,6 +7,12 @@ import { RightPane } from "@/components/right-pane"
 import { BiomassChart } from "@/components/biomass-chart"
 import { BottomPane } from "@/components/bottom-pane"
 import { SimulationTimeline } from "@/components/simulation-timeline"
+import { DetailRows } from "@/components/detail-rows"
+import {
+  activityTypeOptions,
+  constructionCategories,
+  marineSpecies,
+} from "@/config/ecotwin-domain"
 import {
   hasActiveTileGeneration,
   landcoverStatusMessage,
@@ -14,7 +20,19 @@ import {
   tilePrimaryStatus,
 } from "@/lib/tile-population"
 import {
+  formatArea,
+  formatAssetStatus,
+  formatMetersPerPixel,
+  simulationResultRows,
+  tileAreaKm2,
+  type DetailRow,
+} from "@/lib/tile-metrics"
+import {
+  deleteManagementPlan,
+  deleteSimulation,
+  deleteTile,
   fileUrl,
+  updateTile,
 } from "@/state/ecotwin-api"
 import {
   createSimulationAtom,
@@ -77,6 +95,24 @@ function isPreviewableImage(filename: string) {
   )
 }
 
+function isNotFoundError(err: unknown) {
+  if (!err || typeof err !== "object") return false
+  const maybeError = err as { status?: unknown; message?: unknown }
+  return (
+    maybeError.status === 404 ||
+    (typeof maybeError.message === "string" &&
+      maybeError.message.toLowerCase().includes("wasn't found"))
+  )
+}
+
+async function deleteIfPresent(deleteRecord: (id: string) => Promise<unknown>, id: string) {
+  try {
+    await deleteRecord(id)
+  } catch (err) {
+    if (!isNotFoundError(err)) throw err
+  }
+}
+
 export function TilePage() {
   const { tileId, simulationId, planId } = useParams<{ 
     tileId: string; 
@@ -87,6 +123,9 @@ export function TilePage() {
 
   const {
     tiles: tilesList,
+    refreshTiles,
+    refreshManagementPlans,
+    refreshSimulations,
     setHoveredTileId,
     setSelectedTileId,
   } = useEcotwinState()
@@ -122,6 +161,17 @@ export function TilePage() {
   const [runError, setRunError] = useState<string | null>(null)
   const [runPending, setRunPending] = useState(false)
   const [speciesSectionOpen, setSpeciesSectionOpen] = useState(true)
+  const [tileEditOpen, setTileEditOpen] = useState(false)
+  const [tileNameDraft, setTileNameDraft] = useState("")
+  const [tileSavePending, setTileSavePending] = useState(false)
+  const [tileSaveError, setTileSaveError] = useState<string | null>(null)
+  const [tileDeleteOpen, setTileDeleteOpen] = useState(false)
+  const [tileDeletePending, setTileDeletePending] = useState(false)
+  const [tileDeleteError, setTileDeleteError] = useState<string | null>(null)
+  const [simulationDeleteOpen, setSimulationDeleteOpen] = useState(false)
+  const [simulationDeletePending, setSimulationDeletePending] = useState(false)
+  const [simulationDeleteError, setSimulationDeleteError] = useState<string | null>(null)
+  const [resultsMessage, setResultsMessage] = useState<string | null>(null)
 
   const activeSimulationId = simulationId
   const activePlanId = planId
@@ -242,6 +292,36 @@ export function TilePage() {
     return plans
   }, [activePlan, managementPlans, tileId])
 
+  const tilePlanIds = useMemo(
+    () => new Set(tileManagementPlans.map((plan) => plan.id)),
+    [tileManagementPlans]
+  )
+
+  const tileSimulations = useMemo(() => {
+    if (!tilePlanIds.size) return []
+    return (simulations ?? []).filter((simulation) => {
+      const simPlanId = simulation.expand?.plan?.id ?? simulation.plan
+      return !!simPlanId && tilePlanIds.has(simPlanId)
+    })
+  }, [simulations, tilePlanIds])
+
+  const activePlanSimulations = useMemo(() => {
+    if (!activePlan) return tileSimulations
+    return tileSimulations.filter((simulation) => {
+      const simPlanId = simulation.expand?.plan?.id ?? simulation.plan
+      return simPlanId === activePlan.id
+    })
+  }, [activePlan, tileSimulations])
+
+  const latestCompletedSimulation = useMemo(() => {
+    return activePlanSimulations.find(
+      (simulation) =>
+        simulation.resultJson ||
+        simulation.resultNpz ||
+        simulation.status === "completed"
+    ) ?? null
+  }, [activePlanSimulations])
+
   useEffect(() => {
     if (!tileId) return
     setSelectedTileId(tileId)
@@ -256,6 +336,10 @@ export function TilePage() {
   }, [tileByIdCache, tileId, tilesList?.items])
   const tilePollId = tile?.id ?? null
   const tileHasActiveGeneration = hasActiveTileGeneration(tile)
+
+  useEffect(() => {
+    setTileNameDraft(tile?.name ?? "")
+  }, [tile?.id, tile?.name])
 
   const selectedLandcover = useMemo(() => {
     if (!tile?.landcover) return null
@@ -324,7 +408,70 @@ export function TilePage() {
     void fetchManagementPlanById({ id: resolvedPlanId })
   }, [activePlan, activePlanId, activeSimulation?.plan, fetchManagementPlanById])
 
-  const canRunSimulation = Boolean(activePlan && tile?.landcover && tile?.oceanData)
+  const planValidationError = useMemo(() => {
+    if (!activePlan) return "Select a management plan for this tile before running a simulation."
+    if (!tile?.landcover) return landcoverStatusMessage(tile)
+    if (!tile?.oceanData) return oceanDataStatusMessage(tile)
+
+    const tasks = activePlan.expand?.tasks ?? []
+    if (!tasks.length) return "Add at least one activity to this management plan before running a simulation."
+
+    for (const task of tasks) {
+      const data = task.data
+      const supportedTaskType = activityTypeOptions.some((option) => option.id === task.type)
+      if (!supportedTaskType) {
+        return `${task.name || "An activity"} uses an unsupported activity type.`
+      }
+
+      const timing =
+        data?.timing === "constant" || (!task.start && !task.end) ? "constant" : "scheduled"
+      if (timing === "scheduled" && (!task.start || !task.end)) {
+        return `${task.name || "An activity"} needs a start and end date, or should be marked constant.`
+      }
+
+      const targetScope = data?.targetScope
+      if (targetScope !== "wholeTile" && targetScope !== "polygon") {
+        return `${task.name || "An activity"} is missing a target scope.`
+      }
+      if (targetScope === "polygon" && !data?.area) {
+        return `${task.name || "An activity"} needs a polygon area before simulation.`
+      }
+
+      if (task.type === "fishing") {
+        const multipliers = data?.speciesEffortMultipliers
+        if (!multipliers || typeof multipliers !== "object") {
+          return `${task.name || "Fishing activity"} needs per-species effort multipliers.`
+        }
+        for (const species of marineSpecies) {
+          const value = multipliers[species.id]
+          if (typeof value !== "number" || !Number.isFinite(value) || value < 0) {
+            return `${task.name || "Fishing activity"} has an invalid ${species.label} effort multiplier.`
+          }
+        }
+      }
+
+      if (task.type === "construction") {
+        const construction = data?.construction
+        const validCategory = constructionCategories.some(
+          (category) => category.id === construction?.category
+        )
+        if (!validCategory) {
+          return `${task.name || "Construction activity"} needs a construction category.`
+        }
+        if (
+          typeof construction?.intensity !== "number" ||
+          !Number.isFinite(construction.intensity) ||
+          construction.intensity < 0
+        ) {
+          return `${task.name || "Construction activity"} needs a non-negative intensity.`
+        }
+      }
+    }
+
+    return null
+  }, [activePlan, tile])
+
+  const canRunSimulation = !planValidationError
   const simulationBackHref =
     tileId && activePlan?.id
       ? `/tile/${tileId}/management-plan/${activePlan.id}`
@@ -334,6 +481,10 @@ export function TilePage() {
 
   async function handleRunSimulation() {
     if (!tileId || !activePlan) return
+    if (planValidationError) {
+      setRunError(planValidationError)
+      return
+    }
 
     setRunPending(true)
     setRunError(null)
@@ -356,6 +507,123 @@ export function TilePage() {
       setRunPending(false)
     }
   }
+
+  async function handleSaveTile() {
+    if (!tile) return
+    const name = tileNameDraft.trim()
+    if (!name) {
+      setTileSaveError("Enter a tile name before saving.")
+      return
+    }
+
+    setTileSavePending(true)
+    setTileSaveError(null)
+    try {
+      await updateTile(tile.id, { name })
+      await fetchTileById({ id: tile.id })
+      await refreshTiles()
+      setTileEditOpen(false)
+    } catch (err) {
+      setTileSaveError(err instanceof Error ? err.message : String(err))
+    } finally {
+      setTileSavePending(false)
+    }
+  }
+
+  async function handleDeleteTile() {
+    if (!tile) return
+
+    setTileDeletePending(true)
+    setTileDeleteError(null)
+    try {
+      const plansToDelete = tileManagementPlans
+      const planIdSet = new Set(plansToDelete.map((plan) => plan.id))
+      const simulationsToDelete = (simulations ?? []).filter((simulation) => {
+        const simPlanId = simulation.expand?.plan?.id ?? simulation.plan
+        return !!simPlanId && planIdSet.has(simPlanId)
+      })
+
+      await Promise.all(
+        simulationsToDelete.map((simulation) =>
+          deleteIfPresent(deleteSimulation, simulation.id)
+        )
+      )
+      await Promise.all(
+        plansToDelete.map((plan) => deleteIfPresent(deleteManagementPlan, plan.id))
+      )
+      await deleteIfPresent(deleteTile, tile.id)
+
+      setSelectedTileId(null)
+      setHoveredTileId(null)
+      await Promise.all([refreshTiles(), refreshManagementPlans(), refreshSimulations()])
+      navigate("/")
+    } catch (err) {
+      setTileDeleteError(err instanceof Error ? err.message : String(err))
+    } finally {
+      setTileDeletePending(false)
+    }
+  }
+
+  async function handleDeleteActiveSimulation() {
+    if (!activeSimulationId) return
+
+    setSimulationDeletePending(true)
+    setSimulationDeleteError(null)
+    try {
+      await deleteIfPresent(deleteSimulation, activeSimulationId)
+      await refreshSimulations()
+      setSimulationDeleteOpen(false)
+      navigate(simulationBackHref)
+    } catch (err) {
+      setSimulationDeleteError(err instanceof Error ? err.message : String(err))
+    } finally {
+      setSimulationDeletePending(false)
+    }
+  }
+
+  function handleShowResults() {
+    const target = activeSimulation ?? latestCompletedSimulation
+    if (target?.id && (activeSimulationResult || target.resultJson || target.resultNpz)) {
+      navigate(`/tile/${tileId}/simulation/${target.id}`)
+      setResultsMessage(null)
+      return
+    }
+
+    setResultsMessage("Run a simulation before opening results for this plan.")
+  }
+
+  function handleExportReport() {
+    const target = activeSimulation ?? latestCompletedSimulation
+    if (target?.id && (activeSimulationResult || target.resultJson || target.resultNpz)) {
+      navigate(`/tile/${tileId}/simulation/${target.id}/report`)
+      setResultsMessage(null)
+      return
+    }
+
+    setResultsMessage("Run a completed simulation before exporting a report.")
+  }
+
+  const tileDetailRows = useMemo<DetailRow[]>(() => {
+    if (!tile) return []
+    return [
+      formatArea(tileAreaKm2(tile)) ? { label: "Area", value: formatArea(tileAreaKm2(tile))! } : null,
+      formatMetersPerPixel(tile.metersPerPixel)
+        ? { label: "Resolution", value: formatMetersPerPixel(tile.metersPerPixel)! }
+        : null,
+      {
+        label: "Landcover",
+        value: formatAssetStatus(tile.landcoverStatus, Boolean(tile.landcover)) ?? "Not linked",
+      },
+      {
+        label: "Ocean data",
+        value: formatAssetStatus(tile.oceanDataStatus, Boolean(tile.oceanData)) ?? "Not linked",
+      },
+      { label: "Management plans", value: String(tileManagementPlans.length) },
+      { label: "Simulations", value: String(tileSimulations.length) },
+      ...simulationResultRows(activeSimulationResult),
+    ].filter((row): row is DetailRow => Boolean(row))
+  }, [activeSimulationResult, tile, tileManagementPlans.length, tileSimulations.length])
+
   const tileStatus = tilePrimaryStatus(tile, simulationResultLoading)
 
   return (
@@ -370,9 +638,23 @@ export function TilePage() {
           canRunSimulation={canRunSimulation}
           isRunningSimulation={runPending}
           runError={runError ?? simulationResultError?.message ?? null}
+          runDisabledReason={planValidationError}
+          resultsMessage={resultsMessage}
           onRunSimulation={() => {
             void handleRunSimulation()
           }}
+          onEdit={tile ? () => setTileEditOpen(true) : undefined}
+          canShowResults={Boolean(
+            (activeSimulation && (activeSimulationResult || activeSimulation.resultJson || activeSimulation.resultNpz)) ||
+              latestCompletedSimulation
+          )}
+          onShowResults={handleShowResults}
+          canExport={Boolean(
+            (activeSimulation && (activeSimulationResult || activeSimulation.resultJson || activeSimulation.resultNpz)) ||
+              latestCompletedSimulation
+          )}
+          onExport={handleExportReport}
+          onDelete={tile ? () => setTileDeleteOpen(true) : undefined}
         />
       </LeftPane>
 
@@ -418,6 +700,13 @@ export function TilePage() {
                 {managementPlanByIdLoading ? (
                   <div className="mt-2 text-[11px] text-zinc-400 italic">Loading details...</div>
                 ) : null}
+                <button
+                  type="button"
+                  onClick={() => setSimulationDeleteOpen(true)}
+                  className="mt-4 rounded-md border border-red-200 bg-red-50 px-3 py-1.5 text-xs font-medium text-red-700 transition-colors hover:bg-red-100"
+                >
+                  Delete simulation
+                </button>
               </div>
 
               {activeSimulationResult ? (
@@ -438,13 +727,6 @@ export function TilePage() {
                       </button>
                       <button
                         type="button"
-                        className="flex-1 rounded-md bg-zinc-700 py-2 text-xs font-medium text-white/70 opacity-70"
-                        disabled
-                      >
-                        Video
-                      </button>
-                      <button
-                        type="button"
                         onClick={() => setBiomassVisualization("h3Hexagon")}
                         className={`flex-1 cursor-pointer rounded-md py-2 text-xs font-medium transition-colors ${
                           biomassVisualization === "h3Hexagon"
@@ -452,7 +734,7 @@ export function TilePage() {
                             : "bg-zinc-700 text-white hover:bg-zinc-600"
                         }`}
                       >
-                        Graph
+                        3D hex map
                       </button>
                     </div>
                   </div>
@@ -465,7 +747,7 @@ export function TilePage() {
                     >
                       <div>
                         <div className="text-xs font-semibold text-zinc-900">
-                          Functional groups
+                          Species
                         </div>
                         <div className="mt-1 text-[11px] text-zinc-500">
                           {selectedSpeciesCount} of {activeSimulationSpecies.length} visible
@@ -610,7 +892,8 @@ export function TilePage() {
               name={tile?.name || "Untitled tile"} 
               status={tileStatus.label}
               statusTone={tileStatus.tone}
-              createdDate={tile?.created?.substring(0, 10) || "2025-12-12"}
+              createdDate={tile?.created?.substring(0, 10) || "Unknown date"}
+              simulationInfoContent={<DetailRows rows={tileDetailRows} />}
               managementPlansContent={
                 <div className="space-y-3">
                   {tileManagementPlans.length ? (
@@ -794,6 +1077,117 @@ export function TilePage() {
             />
           </div>
         </BottomPane>
+      ) : null}
+
+      {tileEditOpen ? (
+        <div className="fixed inset-0 z-50 grid place-items-center bg-black/35 px-4 backdrop-blur-[1px]">
+          <div className="w-full max-w-md rounded-xl border border-zinc-200 bg-white p-5 shadow-2xl">
+            <div className="text-lg font-semibold text-zinc-950">Edit tile</div>
+            <label className="mt-5 block text-xs font-semibold uppercase tracking-wider text-zinc-500">
+              Tile name
+            </label>
+            <input
+              value={tileNameDraft}
+              onChange={(event) => {
+                setTileNameDraft(event.target.value)
+                setTileSaveError(null)
+              }}
+              className="mt-2 h-10 w-full rounded-md border border-zinc-300 px-3 text-sm text-zinc-950 outline-none focus:border-zinc-900"
+            />
+            {tileSaveError ? (
+              <div className="mt-3 rounded-md border border-red-200 bg-red-50 px-3 py-2 text-xs text-red-700">
+                {tileSaveError}
+              </div>
+            ) : null}
+            <div className="mt-6 flex justify-end gap-2">
+              <button
+                type="button"
+                onClick={() => setTileEditOpen(false)}
+                className="rounded-md border border-zinc-300 px-3 py-2 text-sm font-medium text-zinc-700 hover:bg-zinc-50"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                disabled={tileSavePending}
+                onClick={() => void handleSaveTile()}
+                className="rounded-md bg-zinc-900 px-3 py-2 text-sm font-medium text-white hover:bg-zinc-800 disabled:opacity-60"
+              >
+                {tileSavePending ? "Saving..." : "Save"}
+              </button>
+            </div>
+          </div>
+        </div>
+      ) : null}
+
+      {tileDeleteOpen ? (
+        <div className="fixed inset-0 z-50 grid place-items-center bg-black/35 px-4 backdrop-blur-[1px]">
+          <div className="w-full max-w-lg rounded-xl border border-zinc-200 bg-white p-5 shadow-2xl">
+            <div className="text-lg font-semibold text-zinc-950">Delete tile</div>
+            <div className="mt-3 text-sm leading-6 text-zinc-600">
+              This will delete {tile?.name || "this tile"} and cascade through{" "}
+              {tileManagementPlans.length} management plan
+              {tileManagementPlans.length === 1 ? "" : "s"} and {tileSimulations.length} simulation
+              {tileSimulations.length === 1 ? "" : "s"}.
+            </div>
+            {tileDeleteError ? (
+              <div className="mt-3 rounded-md border border-red-200 bg-red-50 px-3 py-2 text-xs text-red-700">
+                {tileDeleteError}
+              </div>
+            ) : null}
+            <div className="mt-6 flex justify-end gap-2">
+              <button
+                type="button"
+                onClick={() => setTileDeleteOpen(false)}
+                className="rounded-md border border-zinc-300 px-3 py-2 text-sm font-medium text-zinc-700 hover:bg-zinc-50"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                disabled={tileDeletePending}
+                onClick={() => void handleDeleteTile()}
+                className="rounded-md bg-red-600 px-3 py-2 text-sm font-medium text-white hover:bg-red-500 disabled:opacity-60"
+              >
+                {tileDeletePending ? "Deleting..." : "Delete tile"}
+              </button>
+            </div>
+          </div>
+        </div>
+      ) : null}
+
+      {simulationDeleteOpen ? (
+        <div className="fixed inset-0 z-50 grid place-items-center bg-black/35 px-4 backdrop-blur-[1px]">
+          <div className="w-full max-w-lg rounded-xl border border-zinc-200 bg-white p-5 shadow-2xl">
+            <div className="text-lg font-semibold text-zinc-950">Delete simulation</div>
+            <div className="mt-3 text-sm leading-6 text-zinc-600">
+              This will delete simulation {activeSimulationId} and any cached result files stored on
+              the record.
+            </div>
+            {simulationDeleteError ? (
+              <div className="mt-3 rounded-md border border-red-200 bg-red-50 px-3 py-2 text-xs text-red-700">
+                {simulationDeleteError}
+              </div>
+            ) : null}
+            <div className="mt-6 flex justify-end gap-2">
+              <button
+                type="button"
+                onClick={() => setSimulationDeleteOpen(false)}
+                className="rounded-md border border-zinc-300 px-3 py-2 text-sm font-medium text-zinc-700 hover:bg-zinc-50"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                disabled={simulationDeletePending}
+                onClick={() => void handleDeleteActiveSimulation()}
+                className="rounded-md bg-red-600 px-3 py-2 text-sm font-medium text-white hover:bg-red-500 disabled:opacity-60"
+              >
+                {simulationDeletePending ? "Deleting..." : "Delete simulation"}
+              </button>
+            </div>
+          </div>
+        </div>
       ) : null}
     </>
   )

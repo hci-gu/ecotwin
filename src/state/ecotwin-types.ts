@@ -30,12 +30,10 @@ export type Tile = RecordModel & {
   heightmap?: Id
   landcover?: Id
   oceanData?: Id
-  simulations?: Id[]
   expand?: {
     heightmap?: Heightmap
     landcover?: Landcover
     oceanData?: OceanData
-    simulations?: Simulation[]
     [key: string]: unknown
   }
 }
@@ -65,6 +63,8 @@ export type OceanData = RecordModel & {
 
 export type Simulation = RecordModel & {
   options?: unknown
+  inputJson?: unknown
+  status?: "pending" | "running" | "completed" | "failed"
   plan?: Id
   simulationId?: string
   resultJson?: string
@@ -73,12 +73,6 @@ export type Simulation = RecordModel & {
     plan?: ManagementPlan
     [key: string]: unknown
   }
-}
-
-export type Timestep = RecordModel & {
-  index: number
-  data?: unknown
-  simulation: Id
 }
 
 export type SimAgent = {
@@ -124,21 +118,28 @@ export type ManagementPlan = RecordModel & {
 }
 
 export type TaskType =
-  | "landcover"
-  | "fishingPolicy"
   | "fishing"
-  | "hunting"
-  | "forestry"
-  | "infrastructure"
+  | "construction"
+  | "windFarm"
+  | "seaLane"
+  | "trawlArea"
+
+export type TaskTiming = "scheduled" | "constant"
 
 export type TaskData = {
+  timing?: TaskTiming
   objective?: string
   description?: string
   cost?: number
   revenue?: number
   status?: string
-  targetBiomassChangePct?: number
-  affectedFunctionalGroups?: string[]
+  targetScope?: "wholeTile" | "polygon"
+  speciesEffortMultipliers?: Record<string, number>
+  construction?: {
+    category?: string
+    intensity?: number
+    description?: string
+  }
   area?: unknown
   areaSummary?: {
     areaKm2?: number
@@ -163,11 +164,4 @@ export type Task = RecordModel & {
   start?: string
   end?: string
   data?: TaskData
-}
-
-export type User = RecordModel & {
-  email?: string
-  username?: string
-  name?: string
-  [key: string]: unknown
 }

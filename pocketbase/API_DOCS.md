@@ -39,7 +39,7 @@ Useful query options:
 
 - `filter`: PocketBase filter expression string (ex: `zoom = 6 && x = 10 && y = 12`)
 - `sort`: field name(s) (ex: `-created`, `index`, `-index`)
-- `expand`: comma-separated relation fields to expand (ex: `heightmap,landcover,oceanData,simulations,simulations.plan`)
+- `expand`: comma-separated relation fields to expand (ex: `heightmap,landcover,oceanData`)
 - `fields`: limit returned fields (ex: `"id,x,y,zoom,satellite"`)
 
 ### Fetching Files (images/binaries)
@@ -81,7 +81,7 @@ const tile = await pb
   .collection('tiles')
   .getFirstListItem('x = 10 && y = 12 && zoom = 6', {
     expand:
-      'heightmap,landcover,oceanData,simulations,simulations.plan,simulations.plan.tasks',
+      'heightmap,landcover,oceanData',
   })
 
 const satelliteUrl = tile.satellite
@@ -217,17 +217,20 @@ Tasks that can be attached to a management plan.
 Fields:
 
 - `name` (text)
-- `type` (select: `"landcover"` | `"fishingPolicy"` | `"hunting"` | `"forestry"` | `"infrastructure"`)
-- `start` (date)
-- `end` (date)
+- `type` (select: `"fishing"` | `"construction"` | `"windFarm"` | `"seaLane"` | `"trawlArea"`)
+- `start` (date, used when `data.timing` is `"scheduled"`)
+- `end` (date, used when `data.timing` is `"scheduled"`)
 - `data` (json) — task parameters and impact metadata, for example:
+  - `timing`: `"scheduled"` or `"constant"`
   - `objective`
   - `description`
   - `cost`
   - `revenue`
   - `status`
-  - `targetBiomassChangePct`
-  - `affectedFunctionalGroups`
+  - `targetScope`: `"wholeTile"` or `"polygon"`
+  - `area` / `areaSummary` when `targetScope` is `"polygon"`
+  - `speciesEffortMultipliers` for fishing, keyed by species id (`sprat`, `herring`, `cod`)
+  - `construction` for construction activities (`category`, `intensity`, optional `description`)
 
 Example:
 
@@ -434,7 +437,7 @@ const result = await fetch(
 
 ## Options
 
-`options` is a JSON object passed to `POST /simulate/upload`. The server maps keys onto `lib.config.settings.Settings`.
+`options` is a JSON object passed to `POST /simulate/upload`. For plan-driven runs through `GET /simulation/{recordId}/run`, PocketBase stores the normalized plan input on `simulations.inputJson` and sends it under `options.managementPlan`.
 
 Common keys:
 
@@ -444,6 +447,38 @@ Common keys:
 - `age_step_interval` / `ageStepInterval`
 
 Unrecognized keys are ignored.
+
+### Plan-driven simulation input
+
+`GET /simulation/{recordId}/run` validates the selected management plan before upload. It requires a tile with landcover and ocean depth, at least one activity, and activity data that can be normalized for the simulator.
+
+The stored `simulations.inputJson` snapshot has this shape:
+
+```json
+{
+  "version": 1,
+  "planId": "PLAN_ID",
+  "planName": "Plan name",
+  "tileId": "TILE_ID",
+  "tileName": "Tile name",
+  "tileBbox": "minLng,minLat,maxLng,maxLat",
+  "tileAreaKm2": 123.4,
+  "activities": [
+    {
+      "id": "TASK_ID",
+      "type": "fishing",
+      "timing": "scheduled",
+      "start": "2026-01-01",
+      "end": "2026-12-31",
+      "targetScope": "polygon",
+      "area": { "type": "Polygon", "coordinates": [] },
+      "areaSummary": { "areaKm2": 12.3 },
+      "affectedSpecies": ["sprat", "herring", "cod"],
+      "speciesEffortMultipliers": { "sprat": 1, "herring": 1, "cod": 0.8 }
+    }
+  ]
+}
+```
 
 Age-group behavior:
 

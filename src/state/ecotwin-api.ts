@@ -11,8 +11,6 @@ import type {
   Simulation,
   Task,
   Tile,
-  Timestep,
-  User,
 } from "@/state/ecotwin-types"
 
 export function fileUrl(record: RecordModel, filename?: string | null) {
@@ -130,30 +128,6 @@ export async function deleteTask(id: string) {
   return pb.collection("tasks").delete(id)
 }
 
-export async function listTimesteps(
-  simulationId: string,
-  page = 1,
-  perPage = 100,
-  options?: { sort?: string; fields?: string }
-) {
-  return pb.collection("timesteps").getList<Timestep>(page, perPage, {
-    filter: `simulation = "${simulationId}"`,
-    sort: "index",
-    ...options,
-  })
-}
-
-export async function listAllTimesteps(simulationId: string, options?: {
-  sort?: string
-  fields?: string
-}) {
-  return pb.collection("timesteps").getFullList<Timestep>({
-    filter: `simulation = "${simulationId}"`,
-    sort: "index",
-    ...options,
-  })
-}
-
 export async function fetchSimAgents() {
   return pb.send<SimAgentsResponse>("/simulate/agents", { method: "GET" })
 }
@@ -198,13 +172,8 @@ export async function runSimulationByRecordId(
   })
 }
 
-export async function fetchSimPath(path: string) {
-  const normalized = path.startsWith("/") ? path : `/${path}`
-  return pb.send<SimByIdResponse>(`/simulate${normalized}`, { method: "GET" })
-}
-
 export async function createSimulation(
-  data: Partial<Pick<Simulation, "plan" | "options" | "simulationId">>
+  data: Partial<Pick<Simulation, "plan" | "options" | "simulationId" | "status" | "inputJson">>
 ) {
   return pb.collection("simulations").create<Simulation>(data)
 }
@@ -213,26 +182,15 @@ export async function deleteSimulation(id: string) {
   return pb.collection("simulations").delete(id)
 }
 
-export async function simulateUpload(body: BodyInit) {
-  return pb.send("/simulate/upload", { method: "POST", body })
-}
-
-export async function updateTile(id: string, data: Partial<Pick<Tile, "simulations">>) {
+export async function updateTile(
+  id: string,
+  data: Partial<Pick<Tile, "name" | "visible">>
+) {
   return pb.collection("tiles").update<Tile>(id, data)
 }
 
-export async function loginUser(email: string, password: string) {
-  return pb.collection("users").authWithPassword(email, password)
-}
-
-export function logoutUser() {
-  pb.authStore.clear()
-}
-
-export async function fetchMe() {
-  const id = pb.authStore.record?.id
-  if (!id) throw new Error("Not authenticated")
-  return pb.collection("users").getOne<User>(id)
+export async function deleteTile(id: string) {
+  return pb.collection("tiles").delete(id)
 }
 
 export type { ListResult }
