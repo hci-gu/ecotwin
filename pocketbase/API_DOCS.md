@@ -229,7 +229,7 @@ Fields:
   - `status`
   - `targetScope`: `"wholeTile"` or `"polygon"`
   - `area` / `areaSummary` when `targetScope` is `"polygon"`
-  - `speciesEffortMultipliers` for fishing, keyed by species id (`sprat`, `herring`, `cod`)
+  - `speciesEffortMultipliers` for fishing, keyed by species id (`phytoplankton`, `zooplankton`, `pelagicFish`, `codfish`, `porpoises`, `seabirds`)
   - `construction` for construction activities (`category`, `intensity`, optional `description`)
 
 Example:
@@ -276,7 +276,7 @@ What it does:
 - Stores the returned upstream UUID into `simulations.simulationId` (and clears cached result files).
 - Runs `GET /simulate/<simulation_id>` and forwards the response (also cached into `resultJson` / `resultNpz`).
 
-All query parameters (`format`, `worldSize`, `maxSteps`, etc.) are forwarded to the upstream run request.
+All query parameters (`format`, `worldSize`, `maxSteps`, etc.) are forwarded to the upstream run request. If `maxSteps` / `max_steps` is not provided, the bridge derives it from the management plan timeline: the earliest scheduled activity start to the latest scheduled activity end, with one simulation tick per day by default. If `sampleEvery` / `sample_every` is not provided, it is chosen adaptively to keep playback samples bounded.
 
 The workflow is:
 
@@ -337,12 +337,12 @@ This runs a simulation using the uploaded map and returns a sampled biomass time
   - if the folder contains exactly 1 `.npy.npz` / `.npz`, that model is reused for all acting species
   - if it contains multiple files, the API infers species from the filename and requires one model per acting species
   - current training output names look like `{generation}_${species}_{fitness}.npy.npz`
-  - with `age_groups=1`, the acting species are `sprat`, `herring`, `cod`
+  - with `age_groups=1`, the acting species are `phytoplankton`, `zooplankton`, `pelagicFish`, `codfish`, `porpoises`, `seabirds`
   - with `age_groups=3`, the acting species are:
-    - `sprat__a0`, `sprat__a1`, `sprat__a2`
-    - `herring__a0`, `herring__a1`, `herring__a2`
-    - `cod__a0`, `cod__a1`, `cod__a2`
-  - in that case, a multi-file agent set must contain filenames for those full age-group names, for example `12_$cod__a2_1234.5.npy.npz`
+    - `phytoplankton__a0`, `phytoplankton__a1`, `phytoplankton__a2`
+    - `zooplankton__a0`, `zooplankton__a1`, `zooplankton__a2`
+    - `pelagicFish__a0`, `pelagicFish__a1`, `pelagicFish__a2`
+  - in that case, a multi-file agent set must contain filenames for those full age-group names, for example `12_$codfish__a2_1234.5.npy.npz`
 - `modelPath` / `model_path` (string): path to a `.npy.npz` / `.npz` model file. This is loaded once and reused for all acting species.
 - if neither `agentSet` nor `modelPath` is provided, the server falls back to a hardcoded local default model folder. For predictable requests, pass one of them explicitly.
 
@@ -353,10 +353,13 @@ This runs a simulation using the uploaded map and returns a sampled biomass time
 - `simulation_id`: string
 - `world_size`: int
 - `species`: array of strings (order of the last axis in `biomass`)
-  - this is `["plankton", "sprat", "herring", "cod"]` when `age_groups=1`
-  - when `age_groups>1`, this expands to age-group names such as `sprat__a0`, `sprat__a1`, ...
+  - this is `["phytoplankton", "zooplankton", "pelagicFish", "codfish", "porpoises", "seabirds"]` when `age_groups=1`
+  - when `age_groups>1`, this expands to age-group names such as `codfish__a0`, `codfish__a1`, ...
 - `sample_every`: int
 - `include_final`: bool
+- `tick_duration_days`: int, when supplied by a plan-driven run
+- `start_date`: string, when supplied by a plan-driven run
+- `end_date`: string, when supplied by a plan-driven run
 - `dtype`: string (currently `float32`)
 - `shape`: array `[N, H, W, S]`
 - `steps`: array of ints (step index for each snapshot, length `N`)
@@ -364,6 +367,18 @@ This runs a simulation using the uploaded map and returns a sampled biomass time
 - `episode_length`: int (number of environment steps completed)
 - `end_reason`: string (if the world terminated early)
 - `biomass_b64`: base64 string of the raw `biomass` tensor bytes in C-order
+- `biomass_summary`: optional compact chart summary. Mock runs include five replicates by default and return:
+  - `run_count`: number of runs in the ensemble
+  - `confidence_level`: confidence level for the interval, e.g. `0.95`
+  - `ci_method`: interval method, e.g. `t-interval`
+  - `normalization`: e.g. `relative_to_initial`
+  - `grouping`: e.g. `functional_group`
+  - `steps`: sampled step indexes for the summary
+  - `groups`: chart series names
+  - `group_species`: source species used for each group
+  - `mean`, `ci_low`, `ci_high`: matrices shaped `[group][step]`
+
+`biomass_b64` remains a single playback tensor. For mock ensembles it contains the per-cell mean over the five runs; individual replicate tensors are not returned.
 
 **How to decode `biomass_b64` (Python)**
 
@@ -452,13 +467,19 @@ Unrecognized keys are ignored.
 
 `GET /simulation/{recordId}/run` validates the selected management plan before upload. It requires a tile with landcover and ocean depth, at least one activity, and activity data that can be normalized for the simulator.
 
-The stored `simulations.inputJson` snapshot has this shape:
+The stored `simulations.inputJson` snapshot has this shape. `planStart` and `planEnd` are virtual management-plan fields derived from the minimum scheduled task `start` and maximum scheduled task `end`.
 
 ```json
 {
-  "version": 1,
+  "version": 2,
   "planId": "PLAN_ID",
   "planName": "Plan name",
+  "planStart": "2026-01-01",
+  "planEnd": "2026-12-31",
+  "durationDays": 364,
+  "tickDurationDays": 1,
+  "simulationTicks": 364,
+  "sampleEvery": 4,
   "tileId": "TILE_ID",
   "tileName": "Tile name",
   "tileBbox": "minLng,minLat,maxLng,maxLat",
@@ -473,8 +494,15 @@ The stored `simulations.inputJson` snapshot has this shape:
       "targetScope": "polygon",
       "area": { "type": "Polygon", "coordinates": [] },
       "areaSummary": { "areaKm2": 12.3 },
-      "affectedSpecies": ["sprat", "herring", "cod"],
-      "speciesEffortMultipliers": { "sprat": 1, "herring": 1, "cod": 0.8 }
+      "affectedSpecies": ["phytoplankton", "zooplankton", "pelagicFish", "codfish", "porpoises", "seabirds"],
+      "speciesEffortMultipliers": {
+        "phytoplankton": 1,
+        "zooplankton": 1,
+        "pelagicFish": 1,
+        "codfish": 0.8,
+        "porpoises": 1,
+        "seabirds": 1
+      }
     }
   ]
 }
@@ -482,7 +510,7 @@ The stored `simulations.inputJson` snapshot has this shape:
 
 Age-group behavior:
 
-- `age_groups=1` keeps the default learned species: `sprat`, `herring`, `cod`
+- `age_groups=1` keeps the default learned species: `phytoplankton`, `zooplankton`, `pelagicFish`, `codfish`, `porpoises`, `seabirds`
 - `age_groups>1` expands both the learned species set and the output tensor channels
 - if you use `agentSet` with multiple files, filenames must match the expanded acting species names, not only the base names
 
@@ -520,12 +548,14 @@ curl "http://localhost:4000/simulate/<simulation_id>?agentSet=my_age3_set&sample
 
 Expected response metadata:
 
-- `species` will contain `plankton` plus all age-group-expanded fish species
+- `species` will contain all age-group-expanded species
 - with `age_groups=3`, that means:
-  - `plankton`
-  - `sprat__a0`, `sprat__a1`, `sprat__a2`
-  - `herring__a0`, `herring__a1`, `herring__a2`
-  - `cod__a0`, `cod__a1`, `cod__a2`
+  - `phytoplankton__a0`, `phytoplankton__a1`, `phytoplankton__a2`
+  - `zooplankton__a0`, `zooplankton__a1`, `zooplankton__a2`
+  - `pelagicFish__a0`, `pelagicFish__a1`, `pelagicFish__a2`
+  - `codfish__a0`, `codfish__a1`, `codfish__a2`
+  - `porpoises__a0`, `porpoises__a1`, `porpoises__a2`
+  - `seabirds__a0`, `seabirds__a1`, `seabirds__a2`
 - the last axis of `biomass` follows that `species` order exactly
 
 ## List available agent sets

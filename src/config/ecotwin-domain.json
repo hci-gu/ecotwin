@@ -1,8 +1,11 @@
 {
   "species": [
-    { "id": "sprat", "label": "Sprat" },
-    { "id": "herring", "label": "Herring" },
-    { "id": "cod", "label": "Cod" }
+    { "id": "phytoplankton", "label": "Phytoplankton" },
+    { "id": "zooplankton", "label": "Zooplankton" },
+    { "id": "pelagicFish", "label": "Pelagic fish" },
+    { "id": "codfish", "label": "Codfish" },
+    { "id": "porpoises", "label": "Porpoises" },
+    { "id": "seabirds", "label": "Seabirds" }
   ],
   "constructionCategories": [
     { "id": "offshorePlatform", "label": "Offshore platform" },

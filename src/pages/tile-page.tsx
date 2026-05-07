@@ -11,6 +11,7 @@ import { DetailRows } from "@/components/detail-rows"
 import {
   activityTypeOptions,
   constructionCategories,
+  getSpeciesLabel,
   marineSpecies,
 } from "@/config/ecotwin-domain"
 import {
@@ -444,6 +445,7 @@ export function TilePage() {
         }
         for (const species of marineSpecies) {
           const value = multipliers[species.id]
+          if (value === undefined) continue
           if (typeof value !== "number" || !Number.isFinite(value) || value < 0) {
             return `${task.name || "Fishing activity"} has an invalid ${species.label} effort multiplier.`
           }
@@ -792,7 +794,7 @@ export function TilePage() {
                                       speciesSwatchColors[index % speciesSwatchColors.length],
                                   }}
                                 />
-                                <span>{species}</span>
+                                <span>{getSpeciesLabel(species)}</span>
                               </button>
                             )
                           })}
@@ -822,7 +824,7 @@ export function TilePage() {
                     <div className="grid grid-cols-2 gap-2 text-[11px] text-zinc-700">
                       <div className="rounded-md bg-white/70 px-3 py-2 ring-1 ring-black/5">
                         <div className="text-[10px] font-bold uppercase tracking-wider text-zinc-400">
-                          Frames
+                          Samples
                         </div>
                         <div className="mt-1 font-semibold text-zinc-900">
                           {activeSimulationSummary.frameCount}
@@ -1074,6 +1076,9 @@ export function TilePage() {
             <SimulationTimeline
               steps={activeSimulationResult.steps}
               episodeLength={activeSimulationResult.episode_length}
+              startDate={activeSimulationResult.start_date}
+              endDate={activeSimulationResult.end_date}
+              tickDurationDays={activeSimulationResult.tick_duration_days}
             />
           </div>
         </BottomPane>

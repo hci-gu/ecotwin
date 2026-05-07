@@ -87,12 +87,30 @@ export type SimAgent = {
 }
 
 export type SimAgentsResponse = SimAgent[]
+
+export type SimulationBiomassSummary = {
+  run_count: number
+  confidence_level: number
+  ci_method: string
+  normalization: string
+  grouping: string
+  steps: number[]
+  groups: string[]
+  group_species?: string[][]
+  mean: number[][]
+  ci_low: number[][]
+  ci_high: number[][]
+}
+
 export type SimulationResultBase64 = {
   simulation_id: string
   world_size: number
   species: string[]
   sample_every: number
   include_final: boolean
+  tick_duration_days?: number
+  start_date?: string
+  end_date?: string
   dtype: string
   shape: number[]
   steps: number[]
@@ -100,6 +118,7 @@ export type SimulationResultBase64 = {
   episode_length: number
   end_reason?: string
   biomass_b64: string
+  biomass_summary?: SimulationBiomassSummary
 }
 
 export type SimByIdResponse = SimulationResultBase64

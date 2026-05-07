@@ -30,6 +30,7 @@ import {
   summarizeActivityArea,
   toActivityAreaGeometry,
 } from "@/lib/activity-area"
+import { getManagementPlanDateRange } from "@/lib/management-plan-dates"
 import { cn } from "@/lib/utils"
 import {
   createManagementPlan,
@@ -138,15 +139,6 @@ const activityAccentClasses: Record<string, string> = {
   seaLane: "border-blue-400 bg-blue-50/90",
   trawlArea: "border-rose-400 bg-rose-50/90",
   activity: "border-zinc-300 bg-white/90",
-}
-
-const activityTopBorderClasses: Record<string, string> = {
-  fishing: "border-cyan-500",
-  construction: "border-orange-500",
-  windFarm: "border-emerald-500",
-  seaLane: "border-blue-500",
-  trawlArea: "border-rose-500",
-  activity: "border-zinc-400",
 }
 
 function createInitialPlanFormState(): CreatePlanFormState {
@@ -366,6 +358,14 @@ function sumTaskMetric(tasks: Task[], key: "cost" | "revenue") {
 }
 
 function pickTaskDates(tasks: Task[], fallbackCreated?: string) {
+  const range = getManagementPlanDateRange(tasks)
+  if (range) {
+    return {
+      startDate: range.startDate,
+      endDate: range.endDate,
+    }
+  }
+
   const scheduledTasks = tasks.filter((task) => !isConstantTask(task))
   const starts = scheduledTasks
     .map((task) => task.start)
@@ -1138,12 +1138,12 @@ export function ManagementPlansPage() {
                 </div>
 
                 <div className="flex min-h-0 flex-1 flex-col overflow-hidden">
-                  <div className="flex items-center justify-between px-7 py-8">
+                  <div className="flex items-center justify-between px-5 py-4">
                     <div>
                       <div className="text-[0.72rem] uppercase tracking-[0.2em] text-zinc-400">
                         {activePlan.name || "Untitled plan"}
                       </div>
-                      <div className="mt-2 text-sm text-zinc-500">
+                      <div className="mt-1 text-xs text-zinc-500">
                         Location: {planLocationName(activePlan)}
                       </div>
                     </div>
@@ -1159,15 +1159,15 @@ export function ManagementPlansPage() {
                     onScroll={handleTimelineScroll}
                     className="min-h-0 flex-1 overflow-auto overscroll-contain"
                   >
-                    <div className="flex min-h-full flex-col" style={{ minWidth: timelineMonths.length * TIMELINE_MONTH_WIDTH + 56 }}>
+                    <div className="flex min-h-full flex-col" style={{ minWidth: timelineMonths.length * TIMELINE_MONTH_WIDTH + 40 }}>
                       <div
-                        className="sticky top-0 z-10 grid border-y border-zinc-200 bg-white/90 px-7 text-[0.68rem] uppercase tracking-[0.12em] text-zinc-400 backdrop-blur-sm"
+                        className="sticky top-0 z-10 grid border-y border-zinc-200 bg-white/90 px-5 text-[0.62rem] uppercase tracking-[0.12em] text-zinc-400 backdrop-blur-sm"
                         style={{ gridTemplateColumns: timelineGridTemplate }}
                       >
                         {timelineMonths.map((month) => (
                           <div
                             key={month.key}
-                            className="border-l border-zinc-200 px-4 py-3 first:border-l-0"
+                            className="border-l border-zinc-200 px-3 py-2 first:border-l-0"
                           >
                             {month.label}
                           </div>
@@ -1195,110 +1195,82 @@ export function ManagementPlansPage() {
                           const targetLine = formatActivityTarget(task)
                           const accentClass =
                             activityAccentClasses[task.type] ?? activityAccentClasses.activity
-                          const topBorderClass =
-                            activityTopBorderClasses[task.type] ?? activityTopBorderClasses.activity
                           const constantTask = isConstantTask(task)
+                          const statusLine =
+                            typeof data?.status === "string" && data.status.trim()
+                              ? data.status.trim()
+                              : null
+                          const detailLines = summaryLines.filter(
+                            (line) =>
+                              !line.startsWith("Type: ") &&
+                              !line.startsWith("Timing: ") &&
+                              !line.startsWith("Target: ")
+                          )
+                          const compactLines = [
+                            targetLine?.replace(/^Target:\s*/, ""),
+                            ...detailLines,
+                          ].filter((line): line is string => Boolean(line))
 
                           return (
-                            <div key={task.id} className="px-7 py-6">
+                            <div key={task.id} className="px-5 py-2">
                               <div className="grid gap-0" style={{ gridTemplateColumns: timelineGridTemplate }}>
                                 <div
                                   style={{ gridColumn: `${placement.startCol} / span ${placement.span}` }}
                                   className={cn(
-                                    "rounded-md border border-zinc-300 bg-white px-4 py-3 shadow-[0_1px_2px_rgba(0,0,0,0.06)]",
+                                    "overflow-visible rounded-sm border border-l-4 border-zinc-300 bg-white px-2.5 py-2 shadow-[0_1px_2px_rgba(0,0,0,0.05)]",
                                     accentClass
                                   )}
                                 >
                                   <div
                                     className={cn(
-                                      "-mx-4 -mt-3 mb-2 rounded-t-md border-t-[3px] pt-3",
-                                      topBorderClass
+                                      "flex items-center gap-2",
+                                      constantTask
+                                        ? "sticky left-4 z-10 w-[min(42rem,calc(100vw-5rem))]"
+                                        : ""
                                     )}
-                                  ></div>
-                                  {constantTask ? (
-                                    <div className="sticky left-1/2 z-10 mx-auto flex w-[min(30rem,calc(100vw-5rem))] -translate-x-1/2 flex-col items-center py-2 text-center">
-                                      <div className="text-[0.92rem] font-medium text-zinc-900">
-                                        {task.name || "Untitled activity"}
-                                      </div>
-                                      <div className="mt-1 text-[0.72rem] text-zinc-500">
-                                        {getActivityTypeLabel(task.type)} · {formatTaskTiming(task)}
-                                      </div>
-
-                                      {targetLine ? (
-                                        <div className="mt-4 text-[0.82rem] text-zinc-700">
-                                          <span className="font-semibold text-zinc-800">Target:</span>{" "}
-                                          {targetLine.replace(/^Target:\s*/, "")}
+                                  >
+                                    <div className="min-w-0 flex-1">
+                                      <div className="flex min-w-0 items-center gap-2">
+                                        <div className="truncate text-[0.78rem] font-semibold leading-4 text-zinc-900">
+                                          {task.name || "Untitled activity"}
                                         </div>
-                                      ) : null}
-
-                                      <div className="mt-4 text-[0.82rem] leading-6 text-zinc-700">
-                                        <div className="font-semibold text-zinc-800">Details:</div>
-                                        {summaryLines.length ? (
-                                          summaryLines
-                                            .filter((line) => !line.startsWith("Target: "))
-                                            .map((line) => <div key={line}>{line}</div>)
-                                        ) : (
-                                          <div className="text-zinc-500">No activity details saved yet.</div>
-                                        )}
+                                        <span className="shrink-0 rounded-sm bg-white/70 px-1.5 py-0.5 text-[0.58rem] font-semibold uppercase tracking-[0.08em] text-zinc-600 ring-1 ring-black/5">
+                                          {getActivityTypeLabel(task.type)}
+                                        </span>
+                                        {constantTask ? (
+                                          <span className="shrink-0 rounded-sm bg-zinc-900 px-1.5 py-0.5 text-[0.58rem] font-semibold uppercase tracking-[0.08em] text-white">
+                                            Constant
+                                          </span>
+                                        ) : null}
                                       </div>
 
-                                      {typeof data?.status === "string" && data.status.trim() ? (
-                                        <div className="mt-3 text-[0.74rem] text-zinc-500">{data.status}</div>
-                                      ) : null}
-
-                                      <button
-                                        type="button"
-                                        onClick={() => openEditActivity(task)}
-                                        className="mt-4 inline-flex items-center gap-1 rounded-md px-2 py-1 text-[0.72rem] font-medium text-zinc-500 transition-colors hover:bg-zinc-100 hover:text-zinc-900"
-                                      >
-                                        <HugeiconsIcon icon={PencilEdit02Icon} size={14} />
-                                        Edit
-                                      </button>
+                                      <div className="mt-1 flex min-w-0 flex-wrap items-center gap-x-2 gap-y-0.5 text-[0.65rem] leading-4 text-zinc-600">
+                                        <span className="shrink-0 font-medium text-zinc-700">
+                                          {formatTaskTiming(task)}
+                                        </span>
+                                        {compactLines.slice(0, 3).map((line) => (
+                                          <span key={line} className="max-w-[18rem] truncate">
+                                            {line}
+                                          </span>
+                                        ))}
+                                        {statusLine ? (
+                                          <span className="shrink-0 text-zinc-500">
+                                            {statusLine}
+                                          </span>
+                                        ) : null}
+                                      </div>
                                     </div>
-                                  ) : (
-                                    <>
-                                      <div className="flex items-start justify-between gap-4">
-                                        <div>
-                                          <div className="text-[0.92rem] font-medium text-zinc-900">
-                                            {task.name || "Untitled activity"}
-                                          </div>
-                                          <div className="mt-1 text-[0.72rem] text-zinc-500">
-                                            {getActivityTypeLabel(task.type)} · {formatTaskTiming(task)}
-                                          </div>
-                                        </div>
-                                        <button
-                                          type="button"
-                                          onClick={() => openEditActivity(task)}
-                                          className="inline-flex items-center gap-1 rounded-md px-2 py-1 text-[0.72rem] font-medium text-zinc-500 transition-colors hover:bg-zinc-100 hover:text-zinc-900"
-                                        >
-                                          <HugeiconsIcon icon={PencilEdit02Icon} size={14} />
-                                          Edit
-                                        </button>
-                                      </div>
 
-                                      {targetLine ? (
-                                        <div className="mt-4 text-[0.82rem] text-zinc-700">
-                                          <span className="font-semibold text-zinc-800">Target:</span>{" "}
-                                          {targetLine.replace(/^Target:\s*/, "")}
-                                        </div>
-                                      ) : null}
-
-                                      <div className="mt-4 text-[0.82rem] leading-6 text-zinc-700">
-                                        <div className="font-semibold text-zinc-800">Details:</div>
-                                        {summaryLines.length ? (
-                                          summaryLines
-                                            .filter((line) => !line.startsWith("Target: "))
-                                            .map((line) => <div key={line}>{line}</div>)
-                                        ) : (
-                                          <div className="text-zinc-500">No activity details saved yet.</div>
-                                        )}
-                                      </div>
-
-                                      {typeof data?.status === "string" && data.status.trim() ? (
-                                        <div className="mt-3 text-[0.74rem] text-zinc-500">{data.status}</div>
-                                      ) : null}
-                                    </>
-                                  )}
+                                    <button
+                                      type="button"
+                                      onClick={() => openEditActivity(task)}
+                                      title={`Edit ${task.name || "activity"}`}
+                                      aria-label={`Edit ${task.name || "activity"}`}
+                                      className="sticky right-2 z-20 inline-flex size-6 shrink-0 items-center justify-center self-start rounded-sm bg-white/85 text-zinc-500 shadow-sm ring-1 ring-black/5 backdrop-blur transition-colors hover:bg-white hover:text-zinc-950"
+                                    >
+                                      <HugeiconsIcon icon={PencilEdit02Icon} size={12} />
+                                    </button>
+                                  </div>
                                 </div>
                               </div>
                             </div>
@@ -1730,7 +1702,7 @@ export function ManagementPlansPage() {
                       <Input
                         value={createActivityForm.objective}
                         onChange={(event) => updateActivityForm("objective", event.target.value)}
-                        placeholder="E.g. reduce fishing pressure on cod"
+                        placeholder="E.g. reduce fishing pressure on codfish"
                         className="h-14 rounded-2xl border-zinc-200 bg-white px-5 text-lg placeholder:text-zinc-400"
                       />
                     </div>

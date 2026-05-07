@@ -29,6 +29,9 @@ type SimulationResultBase64 = {
   species: string[]
   sample_every: number
   include_final: boolean
+  tick_duration_days?: number
+  start_date?: string
+  end_date?: string
   dtype: "float32"
   shape: number[]
   steps: number[]
@@ -36,6 +39,21 @@ type SimulationResultBase64 = {
   episode_length: number
   end_reason?: string
   biomass_b64: string
+  biomass_summary?: SimulationBiomassSummary
+}
+
+type SimulationBiomassSummary = {
+  run_count: number
+  confidence_level: number
+  ci_method: string
+  normalization: string
+  grouping: string
+  steps: number[]
+  groups: string[]
+  group_species: string[][]
+  mean: number[][]
+  ci_low: number[][]
+  ci_high: number[][]
 }
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
@@ -51,17 +69,60 @@ const isMainModule =
   process.argv[1] !== undefined &&
   path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)
 
-const baseSpecies = ["sprat", "herring", "cod"] as const
-const mockSimulationMaxSteps = 300
+const baseSpecies = [
+  "phytoplankton",
+  "zooplankton",
+  "pelagicFish",
+  "codfish",
+  "porpoises",
+  "seabirds",
+] as const
+const mockSimulationDefaultMaxSteps = 300
+const mockSimulationMaxSteps = 36_500
+const mockSimulationRunCount = 5
 const mockRunMinDelayMs = 1000
 const mockRunMaxDelayMs = 5000
+const defaultSimulationTickDays = 1
+
+const summaryGroups = [
+  {
+    name: "Phytoplankton",
+    sourceSpecies: ["phytoplankton"],
+    weights: { phytoplankton: 1 },
+  },
+  {
+    name: "Zooplankton",
+    sourceSpecies: ["zooplankton"],
+    weights: { zooplankton: 1 },
+  },
+  {
+    name: "Pelagic fish",
+    sourceSpecies: ["pelagicFish"],
+    weights: { pelagicFish: 1 },
+  },
+  {
+    name: "Codfish",
+    sourceSpecies: ["codfish"],
+    weights: { codfish: 1 },
+  },
+  {
+    name: "Porpoises",
+    sourceSpecies: ["porpoises"],
+    weights: { porpoises: 1 },
+  },
+  {
+    name: "Seabirds",
+    sourceSpecies: ["seabirds"],
+    weights: { seabirds: 1 },
+  },
+] as const
 
 const agentSets: AgentSetSummary[] = [
   {
     name: "mock-default",
     kind: "single",
     files: ["10_$cod_9079.34.npy.npz"],
-    species: ["cod"],
+    species: ["codfish"],
   },
   {
     name: "mock-age3",
@@ -78,15 +139,12 @@ const agentSets: AgentSetSummary[] = [
       "12_$cod__a2_10333.40.npy.npz",
     ],
     species: [
-      "sprat__a0",
-      "sprat__a1",
-      "sprat__a2",
-      "herring__a0",
-      "herring__a1",
-      "herring__a2",
-      "cod__a0",
-      "cod__a1",
-      "cod__a2",
+      "phytoplankton",
+      "zooplankton",
+      "pelagicFish",
+      "codfish",
+      "porpoises",
+      "seabirds",
     ],
   },
   {
@@ -192,6 +250,18 @@ function optionBoolean(
   return fallback
 }
 
+function optionString(
+  options: Record<string, unknown>,
+  names: string[],
+  fallback = ""
+) {
+  for (const name of names) {
+    const raw = options[name]
+    if (typeof raw === "string" && raw.trim()) return raw.trim()
+  }
+  return fallback
+}
+
 function buildActingSpecies(ageGroups: number) {
   if (ageGroups <= 1) return [...baseSpecies]
   return baseSpecies.flatMap((name) =>
@@ -200,7 +270,7 @@ function buildActingSpecies(ageGroups: number) {
 }
 
 function buildOutputSpecies(ageGroups: number) {
-  return ["plankton", ...buildActingSpecies(ageGroups)]
+  return buildActingSpecies(ageGroups)
 }
 
 function buildSteps(maxSteps: number, sampleEvery: number, includeFinal: boolean) {
@@ -463,6 +533,147 @@ function buildBiomassData(
   return values
 }
 
+function groupWeightsForSpecies(speciesLabel: string) {
+  const baseLabel = speciesKey(speciesLabel)
+  return summaryGroups
+    .map((group, groupIndex) => {
+      const weights = group.weights as Record<string, number>
+      return {
+        groupIndex,
+        weight: weights[baseLabel] ?? 0,
+      }
+    })
+    .filter((item) => item.weight > 0)
+}
+
+function aggregateSummaryGroups(
+  values: Float32Array,
+  steps: number[],
+  worldSize: number,
+  species: string[]
+) {
+  const totals = summaryGroups.map(() => new Float64Array(steps.length))
+  const speciesWeights = species.map((label) => groupWeightsForSpecies(label))
+  let index = 0
+
+  for (let stepIndex = 0; stepIndex < steps.length; stepIndex += 1) {
+    for (let cell = 0; cell < worldSize * worldSize; cell += 1) {
+      for (let speciesIndex = 0; speciesIndex < species.length; speciesIndex += 1) {
+        const value = values[index++] ?? 0
+        for (const { groupIndex, weight } of speciesWeights[speciesIndex] ?? []) {
+          totals[groupIndex][stepIndex] += value * weight
+        }
+      }
+    }
+  }
+
+  return totals
+}
+
+function roundSummaryValue(value: number) {
+  if (!Number.isFinite(value)) return 0
+  return Number(value.toFixed(4))
+}
+
+function confidenceMargin95(values: number[]) {
+  if (values.length <= 1) return 0
+  const mean = values.reduce((total, value) => total + value, 0) / values.length
+  const variance =
+    values.reduce((total, value) => total + (value - mean) ** 2, 0) /
+    (values.length - 1)
+  const standardError = Math.sqrt(Math.max(0, variance)) / Math.sqrt(values.length)
+
+  // t critical for a two-sided 95% interval with df = 4.
+  return 2.776 * standardError
+}
+
+function buildBiomassSummary(samples: number[][][], steps: number[]) {
+  const mean: number[][] = []
+  const ciLow: number[][] = []
+  const ciHigh: number[][] = []
+
+  for (let groupIndex = 0; groupIndex < summaryGroups.length; groupIndex += 1) {
+    const groupMean: number[] = []
+    const groupLow: number[] = []
+    const groupHigh: number[] = []
+
+    for (let stepIndex = 0; stepIndex < steps.length; stepIndex += 1) {
+      const values = samples[groupIndex]?.[stepIndex] ?? []
+      const center =
+        values.length > 0
+          ? values.reduce((total, value) => total + value, 0) / values.length
+          : 0
+      const margin = confidenceMargin95(values)
+      groupMean.push(roundSummaryValue(center))
+      groupLow.push(roundSummaryValue(Math.max(0, center - margin)))
+      groupHigh.push(roundSummaryValue(center + margin))
+    }
+
+    mean.push(groupMean)
+    ciLow.push(groupLow)
+    ciHigh.push(groupHigh)
+  }
+
+  return {
+    run_count: mockSimulationRunCount,
+    confidence_level: 0.95,
+    ci_method: "t-interval",
+    normalization: "relative_to_initial",
+    grouping: "functional_group",
+    steps,
+    groups: summaryGroups.map((group) => group.name),
+    group_species: summaryGroups.map((group) => [...group.sourceSpecies]),
+    mean,
+    ci_low: ciLow,
+    ci_high: ciHigh,
+  } satisfies SimulationBiomassSummary
+}
+
+function buildBiomassEnsemble(
+  steps: number[],
+  worldSize: number,
+  species: string[],
+  maxSteps: number,
+  options: Record<string, unknown>,
+  seed: string
+) {
+  const valueCount = steps.length * worldSize * worldSize * species.length
+  const biomassMean = new Float64Array(valueCount)
+  const summarySamples = summaryGroups.map(() =>
+    Array.from({ length: steps.length }, () => [] as number[])
+  )
+
+  for (let runIndex = 0; runIndex < mockSimulationRunCount; runIndex += 1) {
+    const biomass = buildBiomassData(
+      steps,
+      worldSize,
+      species,
+      maxSteps,
+      options,
+      `${seed}:run:${runIndex + 1}`
+    )
+
+    for (let index = 0; index < biomass.length; index += 1) {
+      biomassMean[index] += biomass[index] / mockSimulationRunCount
+    }
+
+    const groupTotals = aggregateSummaryGroups(biomass, steps, worldSize, species)
+    for (let groupIndex = 0; groupIndex < groupTotals.length; groupIndex += 1) {
+      const baseline = groupTotals[groupIndex][0] || 1
+      for (let stepIndex = 0; stepIndex < steps.length; stepIndex += 1) {
+        summarySamples[groupIndex][stepIndex].push(
+          groupTotals[groupIndex][stepIndex] / baseline
+        )
+      }
+    }
+  }
+
+  return {
+    biomass: Float32Array.from(biomassMean),
+    summary: buildBiomassSummary(summarySamples, steps),
+  }
+}
+
 function simulationResponse(
   simulationId: string,
   query: URLSearchParams,
@@ -478,7 +689,7 @@ function simulationResponse(
   const maxSteps = parseInteger(
     query,
     ["maxSteps", "max_steps"],
-    optionInteger(options, ["max_steps", "maxSteps"], mockSimulationMaxSteps),
+    optionInteger(options, ["max_steps", "maxSteps"], mockSimulationDefaultMaxSteps),
     mockSimulationMaxSteps
   )
   const sampleEvery = parseInteger(
@@ -492,13 +703,31 @@ function simulationResponse(
     ["includeFinal", "include_final"],
     optionBoolean(options, ["include_final", "includeFinal"], true)
   )
+  const tickDurationDays = parseInteger(
+    query,
+    ["tickDurationDays", "tick_duration_days"],
+    optionInteger(
+      options,
+      ["tick_duration_days", "tickDurationDays"],
+      defaultSimulationTickDays
+    )
+  )
+  const managementPlan = toObject(options.managementPlan)
+  const startDate =
+    query.get("startDate") ??
+    query.get("start_date") ??
+    optionString(managementPlan, ["planStart", "startDate", "start_date"])
+  const endDate =
+    query.get("endDate") ??
+    query.get("end_date") ??
+    optionString(managementPlan, ["planEnd", "endDate", "end_date"])
   const ageGroups = Math.max(
     1,
     optionInteger(options, ["age_groups", "ageGroups"], 1)
   )
   const species = buildOutputSpecies(ageGroups)
   const steps = buildSteps(maxSteps, sampleEvery, includeFinal)
-  const biomass = buildBiomassData(
+  const ensemble = buildBiomassEnsemble(
     steps,
     worldSize,
     species,
@@ -513,13 +742,17 @@ function simulationResponse(
     species,
     sample_every: sampleEvery,
     include_final: includeFinal,
+    tick_duration_days: tickDurationDays,
+    start_date: startDate || undefined,
+    end_date: endDate || undefined,
     dtype: "float32",
     shape: [steps.length, worldSize, worldSize, species.length],
     steps,
     fitness: Number((maxSteps * (8 + ageGroups * 0.75)).toFixed(2)),
     episode_length: maxSteps,
     end_reason: "completed",
-    biomass_b64: Buffer.from(biomass.buffer).toString("base64"),
+    biomass_b64: Buffer.from(ensemble.biomass.buffer).toString("base64"),
+    biomass_summary: ensemble.summary,
   }
 }
 

@@ -149,18 +149,47 @@ type simulationUploadResponse struct {
 }
 
 type mockSimulationResponse struct {
-	SimulationID  string   `json:"simulation_id"`
-	WorldSize     int      `json:"world_size"`
-	Species       []string `json:"species"`
-	SampleEvery   int      `json:"sample_every"`
-	IncludeFinal  bool     `json:"include_final"`
-	DType         string   `json:"dtype"`
-	Shape         []int    `json:"shape"`
-	Steps         []int    `json:"steps"`
-	Fitness       float64  `json:"fitness"`
-	EpisodeLength int      `json:"episode_length"`
-	EndReason     string   `json:"end_reason,omitempty"`
-	BiomassB64    string   `json:"biomass_b64"`
+	SimulationID     string                        `json:"simulation_id"`
+	WorldSize        int                           `json:"world_size"`
+	Species          []string                      `json:"species"`
+	SampleEvery      int                           `json:"sample_every"`
+	IncludeFinal     bool                          `json:"include_final"`
+	TickDurationDays int                           `json:"tick_duration_days,omitempty"`
+	StartDate        string                        `json:"start_date,omitempty"`
+	EndDate          string                        `json:"end_date,omitempty"`
+	DType            string                        `json:"dtype"`
+	Shape            []int                         `json:"shape"`
+	Steps            []int                         `json:"steps"`
+	Fitness          float64                       `json:"fitness"`
+	EpisodeLength    int                           `json:"episode_length"`
+	EndReason        string                        `json:"end_reason,omitempty"`
+	BiomassB64       string                        `json:"biomass_b64"`
+	BiomassSummary   *mockSimulationBiomassSummary `json:"biomass_summary,omitempty"`
+}
+
+type mockSimulationBiomassSummary struct {
+	RunCount        int         `json:"run_count"`
+	ConfidenceLevel float64     `json:"confidence_level"`
+	CIMethod        string      `json:"ci_method"`
+	Normalization   string      `json:"normalization"`
+	Grouping        string      `json:"grouping"`
+	Steps           []int       `json:"steps"`
+	Groups          []string    `json:"groups"`
+	GroupSpecies    [][]string  `json:"group_species"`
+	Mean            [][]float64 `json:"mean"`
+	CILow           [][]float64 `json:"ci_low"`
+	CIHigh          [][]float64 `json:"ci_high"`
+}
+
+type mockSummaryGroup struct {
+	Name          string
+	SourceSpecies []string
+	Weights       map[string]float64
+}
+
+type mockSummaryGroupWeight struct {
+	GroupIndex int
+	Weight     float64
 }
 
 type mockAgentSetSummary struct {
@@ -189,17 +218,30 @@ type normalizedActivityInput struct {
 }
 
 type normalizedSimulationInput struct {
-	Version     int                       `json:"version"`
-	PlanID      string                    `json:"planId"`
-	PlanName    string                    `json:"planName"`
-	TileID      string                    `json:"tileId"`
-	TileName    string                    `json:"tileName"`
-	TileBBox    string                    `json:"tileBbox,omitempty"`
-	TileAreaKm2 float64                   `json:"tileAreaKm2,omitempty"`
-	Activities  []normalizedActivityInput `json:"activities"`
+	Version          int                       `json:"version"`
+	PlanID           string                    `json:"planId"`
+	PlanName         string                    `json:"planName"`
+	PlanStart        string                    `json:"planStart,omitempty"`
+	PlanEnd          string                    `json:"planEnd,omitempty"`
+	DurationDays     int                       `json:"durationDays,omitempty"`
+	TickDurationDays int                       `json:"tickDurationDays"`
+	SimulationTicks  int                       `json:"simulationTicks"`
+	SampleEvery      int                       `json:"sampleEvery"`
+	TileID           string                    `json:"tileId"`
+	TileName         string                    `json:"tileName"`
+	TileBBox         string                    `json:"tileBbox,omitempty"`
+	TileAreaKm2      float64                   `json:"tileAreaKm2,omitempty"`
+	Activities       []normalizedActivityInput `json:"activities"`
 }
 
-var simulationSpecies = []string{"sprat", "herring", "cod"}
+var simulationSpecies = []string{
+	"phytoplankton",
+	"zooplankton",
+	"pelagicFish",
+	"codfish",
+	"porpoises",
+	"seabirds",
+}
 
 var constructionCategorySet = map[string]bool{
 	"offshorePlatform": true,
@@ -234,9 +276,46 @@ const (
 	tileAssetStatusFailed     = "failed"
 	tileAssetStatusSkipped    = "skipped"
 
-	mockSimulationMaxWorldSize = 24
-	mockSimulationMaxSteps     = 300
+	mockSimulationMaxWorldSize    = 24
+	mockSimulationDefaultMaxSteps = 300
+	mockSimulationMaxSteps        = 36500
+	mockSimulationRunCount        = 5
+	defaultSimulationTickDays     = 1
+	maxSimulationPlaybackFrames   = 96
 )
+
+var mockSummaryGroups = []mockSummaryGroup{
+	{
+		Name:          "Phytoplankton",
+		SourceSpecies: []string{"phytoplankton"},
+		Weights:       map[string]float64{"phytoplankton": 1},
+	},
+	{
+		Name:          "Zooplankton",
+		SourceSpecies: []string{"zooplankton"},
+		Weights:       map[string]float64{"zooplankton": 1},
+	},
+	{
+		Name:          "Pelagic fish",
+		SourceSpecies: []string{"pelagicFish"},
+		Weights:       map[string]float64{"pelagicFish": 1},
+	},
+	{
+		Name:          "Codfish",
+		SourceSpecies: []string{"codfish"},
+		Weights:       map[string]float64{"codfish": 1},
+	},
+	{
+		Name:          "Porpoises",
+		SourceSpecies: []string{"porpoises"},
+		Weights:       map[string]float64{"porpoises": 1},
+	},
+	{
+		Name:          "Seabirds",
+		SourceSpecies: []string{"seabirds"},
+		Weights:       map[string]float64{"seabirds": 1},
+	},
+}
 
 func simulationMockEnabled() bool {
 	value := strings.TrimSpace(strings.ToLower(os.Getenv("SIMULATION_MOCK")))
@@ -290,7 +369,7 @@ func mockSimulationAgents() []mockAgentSetSummary {
 			Name:    "mock-default",
 			Kind:    "single",
 			Files:   []string{"10_$cod_9079.34.npy.npz"},
-			Species: []string{"cod"},
+			Species: []string{"codfish"},
 		},
 		{
 			Name: "mock-age3",
@@ -307,9 +386,12 @@ func mockSimulationAgents() []mockAgentSetSummary {
 				"12_$cod__a2_10333.40.npy.npz",
 			},
 			Species: []string{
-				"sprat__a0", "sprat__a1", "sprat__a2",
-				"herring__a0", "herring__a1", "herring__a2",
-				"cod__a0", "cod__a1", "cod__a2",
+				"phytoplankton",
+				"zooplankton",
+				"pelagicFish",
+				"codfish",
+				"porpoises",
+				"seabirds",
 			},
 		},
 		{
@@ -318,6 +400,227 @@ func mockSimulationAgents() []mockAgentSetSummary {
 			Files: []string{},
 		},
 	}
+}
+
+func mockSpeciesKey(label string) string {
+	base, _, ok := strings.Cut(label, "__")
+	if ok {
+		return base
+	}
+	return label
+}
+
+func mockGroupWeightsForSpecies(label string) []mockSummaryGroupWeight {
+	baseLabel := mockSpeciesKey(label)
+	weights := make([]mockSummaryGroupWeight, 0, len(mockSummaryGroups))
+	for groupIndex, group := range mockSummaryGroups {
+		if weight := group.Weights[baseLabel]; weight > 0 {
+			weights = append(weights, mockSummaryGroupWeight{
+				GroupIndex: groupIndex,
+				Weight:     weight,
+			})
+		}
+	}
+	return weights
+}
+
+func buildMockRunValues(
+	simulationID string,
+	runIndex int,
+	steps []int,
+	worldSize int,
+	species []string,
+	maxSteps int,
+) []float32 {
+	values := make([]float32, len(steps)*worldSize*worldSize*len(species))
+	offset := 0
+	idPhase := float64(len(simulationID)%17) * 0.11
+	runPhase := float64(runIndex)*0.47 + idPhase
+	runScale := 0.92 + 0.04*float64(runIndex)
+
+	for _, step := range steps {
+		progress := float64(step) / float64(maxSteps)
+		for y := 0; y < worldSize; y++ {
+			yRatio := float64(y) / float64(worldSize-1)
+			for x := 0; x < worldSize; x++ {
+				xRatio := float64(x) / float64(worldSize-1)
+				spatial := 0.65 + 0.35*math.Sin((xRatio+yRatio+progress+runPhase*0.08)*math.Pi)
+				localVariation := 1 + 0.08*math.Sin(
+					(xRatio*3.1+yRatio*2.7+progress*1.4)*math.Pi+runPhase,
+				)
+
+				for sp := range species {
+					phase := float64(sp) * 0.55
+					base := 70 - float64(sp)*8
+					if sp >= 4 {
+						base = 18 + float64(sp-4)*3
+					}
+					seasonal := math.Sin(progress*math.Pi*2 + phase + runPhase*0.16)
+					trend := 1 - math.Max(0, float64(sp)-2)*0.035*progress
+					cellValue := base*trend + base*0.22*seasonal + (10-float64(sp))*spatial
+					values[offset] = float32(math.Max(0, cellValue*runScale*localVariation))
+					offset++
+				}
+			}
+		}
+	}
+
+	return values
+}
+
+func aggregateMockSummaryGroups(
+	values []float32,
+	steps []int,
+	worldSize int,
+	species []string,
+) [][]float64 {
+	totals := make([][]float64, len(mockSummaryGroups))
+	for groupIndex := range totals {
+		totals[groupIndex] = make([]float64, len(steps))
+	}
+
+	speciesWeights := make([][]mockSummaryGroupWeight, len(species))
+	for index, label := range species {
+		speciesWeights[index] = mockGroupWeightsForSpecies(label)
+	}
+
+	offset := 0
+	for stepIndex := range steps {
+		for cell := 0; cell < worldSize*worldSize; cell++ {
+			for speciesIndex := range species {
+				value := float64(values[offset])
+				offset++
+				for _, groupWeight := range speciesWeights[speciesIndex] {
+					totals[groupWeight.GroupIndex][stepIndex] += value * groupWeight.Weight
+				}
+			}
+		}
+	}
+
+	return totals
+}
+
+func roundMockSummaryValue(value float64) float64 {
+	if math.IsNaN(value) || math.IsInf(value, 0) {
+		return 0
+	}
+	return math.Round(value*10000) / 10000
+}
+
+func mockConfidenceMargin95(values []float64) float64 {
+	if len(values) <= 1 {
+		return 0
+	}
+
+	var sum float64
+	for _, value := range values {
+		sum += value
+	}
+	mean := sum / float64(len(values))
+
+	var varianceSum float64
+	for _, value := range values {
+		diff := value - mean
+		varianceSum += diff * diff
+	}
+	variance := varianceSum / float64(len(values)-1)
+	standardError := math.Sqrt(math.Max(0, variance)) / math.Sqrt(float64(len(values)))
+
+	// t critical for a two-sided 95% interval with df = 4.
+	return 2.776 * standardError
+}
+
+func buildMockBiomassSummary(samples [][][]float64, steps []int) *mockSimulationBiomassSummary {
+	mean := make([][]float64, len(mockSummaryGroups))
+	ciLow := make([][]float64, len(mockSummaryGroups))
+	ciHigh := make([][]float64, len(mockSummaryGroups))
+	groups := make([]string, len(mockSummaryGroups))
+	groupSpecies := make([][]string, len(mockSummaryGroups))
+
+	for groupIndex, group := range mockSummaryGroups {
+		groups[groupIndex] = group.Name
+		groupSpecies[groupIndex] = append([]string(nil), group.SourceSpecies...)
+		mean[groupIndex] = make([]float64, len(steps))
+		ciLow[groupIndex] = make([]float64, len(steps))
+		ciHigh[groupIndex] = make([]float64, len(steps))
+
+		for stepIndex := range steps {
+			values := samples[groupIndex][stepIndex]
+			var sum float64
+			for _, value := range values {
+				sum += value
+			}
+
+			center := 0.0
+			if len(values) > 0 {
+				center = sum / float64(len(values))
+			}
+			margin := mockConfidenceMargin95(values)
+			mean[groupIndex][stepIndex] = roundMockSummaryValue(center)
+			ciLow[groupIndex][stepIndex] = roundMockSummaryValue(math.Max(0, center-margin))
+			ciHigh[groupIndex][stepIndex] = roundMockSummaryValue(center + margin)
+		}
+	}
+
+	return &mockSimulationBiomassSummary{
+		RunCount:        mockSimulationRunCount,
+		ConfidenceLevel: 0.95,
+		CIMethod:        "t-interval",
+		Normalization:   "relative_to_initial",
+		Grouping:        "functional_group",
+		Steps:           steps,
+		Groups:          groups,
+		GroupSpecies:    groupSpecies,
+		Mean:            mean,
+		CILow:           ciLow,
+		CIHigh:          ciHigh,
+	}
+}
+
+func buildMockBiomassEnsemble(
+	simulationID string,
+	steps []int,
+	worldSize int,
+	species []string,
+	maxSteps int,
+) ([]byte, *mockSimulationBiomassSummary) {
+	totalCells := len(steps) * worldSize * worldSize * len(species)
+	meanValues := make([]float64, totalCells)
+	summarySamples := make([][][]float64, len(mockSummaryGroups))
+	for groupIndex := range summarySamples {
+		summarySamples[groupIndex] = make([][]float64, len(steps))
+		for stepIndex := range steps {
+			summarySamples[groupIndex][stepIndex] = make([]float64, 0, mockSimulationRunCount)
+		}
+	}
+
+	for runIndex := 0; runIndex < mockSimulationRunCount; runIndex++ {
+		values := buildMockRunValues(simulationID, runIndex, steps, worldSize, species, maxSteps)
+		for index, value := range values {
+			meanValues[index] += float64(value) / float64(mockSimulationRunCount)
+		}
+
+		groupTotals := aggregateMockSummaryGroups(values, steps, worldSize, species)
+		for groupIndex, totals := range groupTotals {
+			baseline := totals[0]
+			if baseline <= 0 {
+				baseline = 1
+			}
+			for stepIndex, total := range totals {
+				summarySamples[groupIndex][stepIndex] = append(
+					summarySamples[groupIndex][stepIndex],
+					total/baseline,
+				)
+			}
+		}
+	}
+
+	raw := make([]byte, totalCells*4)
+	for index, value := range meanValues {
+		binary.LittleEndian.PutUint32(raw[index*4:], math.Float32bits(float32(value)))
+	}
+
+	return raw, buildMockBiomassSummary(summarySamples, steps)
 }
 
 func buildMockSimulationResponse(simulationID string, query url.Values) ([]byte, string, error) {
@@ -329,7 +632,7 @@ func buildMockSimulationResponse(simulationID string, query url.Values) ([]byte,
 		worldSize = mockSimulationMaxWorldSize
 	}
 
-	maxSteps := queryInt(query, []string{"maxSteps", "max_steps"}, mockSimulationMaxSteps)
+	maxSteps := queryInt(query, []string{"maxSteps", "max_steps"}, mockSimulationDefaultMaxSteps)
 	if maxSteps < 1 {
 		maxSteps = 1
 	}
@@ -343,8 +646,12 @@ func buildMockSimulationResponse(simulationID string, query url.Values) ([]byte,
 	}
 
 	includeFinal := queryBool(query, []string{"includeFinal", "include_final"}, true)
+	tickDurationDays := queryInt(query, []string{"tickDurationDays", "tick_duration_days"}, defaultSimulationTickDays)
+	if tickDurationDays < 1 {
+		tickDurationDays = defaultSimulationTickDays
+	}
 
-	species := []string{"plankton", "sprat", "herring", "cod"}
+	species := append([]string(nil), simulationSpecies...)
 	steps := make([]int, 0, maxSteps/sampleEvery+2)
 	for step := 0; step <= maxSteps; step += sampleEvery {
 		steps = append(steps, step)
@@ -359,51 +666,26 @@ func buildMockSimulationResponse(simulationID string, query url.Values) ([]byte,
 		steps = append(steps, 0)
 	}
 
+	raw, summary := buildMockBiomassEnsemble(simulationID, steps, worldSize, species, maxSteps)
 	snapshotCount := len(steps)
-	totalCells := snapshotCount * worldSize * worldSize * len(species)
-	raw := make([]byte, totalCells*4)
-
-	writeValue := func(offset int, value float32) {
-		binary.LittleEndian.PutUint32(raw[offset:], math.Float32bits(value))
-	}
-
-	offset := 0
-	for tIndex, step := range steps {
-		progress := float64(step) / float64(maxSteps)
-		for y := 0; y < worldSize; y++ {
-			yRatio := float64(y) / float64(worldSize-1)
-			for x := 0; x < worldSize; x++ {
-				xRatio := float64(x) / float64(worldSize-1)
-				spatial := 0.65 + 0.35*math.Sin((xRatio+yRatio+progress)*math.Pi)
-
-				values := []float32{
-					float32(65 + 18*math.Sin(progress*math.Pi*2) + 10*spatial),
-					float32(32 + 10*math.Sin(progress*math.Pi*2+0.8) + 6*spatial),
-					float32(28 + 8*math.Cos(progress*math.Pi*2+0.4) + 5*spatial),
-					float32(18 + 6*math.Cos(progress*math.Pi*1.2) - 4*progress + 3*spatial),
-				}
-
-				for sp := range species {
-					writeValue(offset, values[sp])
-					offset += 4
-				}
-			}
-		}
-		_ = tIndex
-	}
 
 	response := mockSimulationResponse{
-		SimulationID:  simulationID,
-		WorldSize:     worldSize,
-		Species:       species,
-		SampleEvery:   sampleEvery,
-		IncludeFinal:  includeFinal,
-		DType:         "float32",
-		Shape:         []int{snapshotCount, worldSize, worldSize, len(species)},
-		Steps:         steps,
-		Fitness:       float64(maxSteps) * 12.5,
-		EpisodeLength: maxSteps,
-		BiomassB64:    base64.StdEncoding.EncodeToString(raw),
+		SimulationID:     simulationID,
+		WorldSize:        worldSize,
+		Species:          species,
+		SampleEvery:      sampleEvery,
+		IncludeFinal:     includeFinal,
+		TickDurationDays: tickDurationDays,
+		StartDate:        firstNonEmptyString(query.Get("startDate"), query.Get("start_date")),
+		EndDate:          firstNonEmptyString(query.Get("endDate"), query.Get("end_date")),
+		DType:            "float32",
+		Shape:            []int{snapshotCount, worldSize, worldSize, len(species)},
+		Steps:            steps,
+		Fitness:          float64(maxSteps) * 12.5,
+		EpisodeLength:    maxSteps,
+		EndReason:        "completed",
+		BiomassB64:       base64.StdEncoding.EncodeToString(raw),
+		BiomassSummary:   summary,
 	}
 
 	body, err := json.Marshal(response)
@@ -607,6 +889,77 @@ func requireStringFromMap(data map[string]any, key string) string {
 	return strings.TrimSpace(value)
 }
 
+func parsePlanDate(value string) (time.Time, bool) {
+	datePart := strings.TrimSpace(value)
+	if len(datePart) >= 10 {
+		datePart = datePart[:10]
+	}
+	if datePart == "" {
+		return time.Time{}, false
+	}
+
+	parsed, err := time.Parse("2006-01-02", datePart)
+	if err != nil {
+		return time.Time{}, false
+	}
+	return parsed, true
+}
+
+func daysBetween(start time.Time, end time.Time) int {
+	days := int(math.Round(end.Sub(start).Hours() / 24))
+	if days < 0 {
+		return 0
+	}
+	return days
+}
+
+func sampleEveryForSimulationTicks(ticks int) int {
+	if ticks <= 0 {
+		return 1
+	}
+	sampleEvery := int(math.Ceil(float64(ticks) / float64(maxSimulationPlaybackFrames)))
+	if sampleEvery < 1 {
+		return 1
+	}
+	return sampleEvery
+}
+
+func applySimulationTimelineDefaults(rawQuery string, input *normalizedSimulationInput) string {
+	query, err := url.ParseQuery(rawQuery)
+	if err != nil {
+		query = url.Values{}
+	}
+
+	if input == nil || input.SimulationTicks <= 0 {
+		return query.Encode()
+	}
+
+	effectiveTicks := input.SimulationTicks
+	if rawTicks := firstNonEmptyString(query.Get("maxSteps"), query.Get("max_steps")); rawTicks != "" {
+		if parsed, err := strconv.Atoi(strings.TrimSpace(rawTicks)); err == nil && parsed > 0 {
+			effectiveTicks = parsed
+		}
+	}
+
+	if query.Get("maxSteps") == "" && query.Get("max_steps") == "" {
+		query.Set("maxSteps", strconv.Itoa(input.SimulationTicks))
+	}
+	if query.Get("sampleEvery") == "" && query.Get("sample_every") == "" {
+		query.Set("sampleEvery", strconv.Itoa(sampleEveryForSimulationTicks(effectiveTicks)))
+	}
+	if query.Get("tickDurationDays") == "" && query.Get("tick_duration_days") == "" {
+		query.Set("tickDurationDays", strconv.Itoa(input.TickDurationDays))
+	}
+	if input.PlanStart != "" && query.Get("startDate") == "" && query.Get("start_date") == "" {
+		query.Set("startDate", input.PlanStart)
+	}
+	if input.PlanEnd != "" && query.Get("endDate") == "" && query.Get("end_date") == "" {
+		query.Set("endDate", input.PlanEnd)
+	}
+
+	return query.Encode()
+}
+
 func buildNormalizedSimulationInput(app core.App, plan *core.Record, tile *core.Record) (*normalizedSimulationInput, error) {
 	taskIds := plan.GetStringSlice("tasks")
 	if len(taskIds) == 0 {
@@ -615,15 +968,21 @@ func buildNormalizedSimulationInput(app core.App, plan *core.Record, tile *core.
 
 	tileArea := bboxAreaKm2(tile.GetString("bbox"))
 	input := &normalizedSimulationInput{
-		Version:     1,
-		PlanID:      plan.Id,
-		PlanName:    plan.GetString("name"),
-		TileID:      tile.Id,
-		TileName:    tile.GetString("name"),
-		TileBBox:    tile.GetString("bbox"),
-		TileAreaKm2: tileArea,
-		Activities:  make([]normalizedActivityInput, 0, len(taskIds)),
+		Version:          2,
+		PlanID:           plan.Id,
+		PlanName:         plan.GetString("name"),
+		TickDurationDays: defaultSimulationTickDays,
+		SimulationTicks:  mockSimulationDefaultMaxSteps,
+		SampleEvery:      sampleEveryForSimulationTicks(mockSimulationDefaultMaxSteps),
+		TileID:           tile.Id,
+		TileName:         tile.GetString("name"),
+		TileBBox:         tile.GetString("bbox"),
+		TileAreaKm2:      tileArea,
+		Activities:       make([]normalizedActivityInput, 0, len(taskIds)),
 	}
+	var planStart time.Time
+	var planEnd time.Time
+	hasPlanRange := false
 
 	for _, taskId := range taskIds {
 		task, err := app.FindRecordById("tasks", taskId)
@@ -650,6 +1009,26 @@ func buildNormalizedSimulationInput(app core.App, plan *core.Record, tile *core.
 		}
 		if timing == "scheduled" && (task.GetString("start") == "" || task.GetString("end") == "") {
 			return nil, fmt.Errorf("scheduled activity %q is missing start or end date", task.GetString("name"))
+		}
+		if timing == "scheduled" {
+			start, ok := parsePlanDate(task.GetString("start"))
+			if !ok {
+				return nil, fmt.Errorf("scheduled activity %q has invalid start date", task.GetString("name"))
+			}
+			end, ok := parsePlanDate(task.GetString("end"))
+			if !ok {
+				return nil, fmt.Errorf("scheduled activity %q has invalid end date", task.GetString("name"))
+			}
+			if end.Before(start) {
+				return nil, fmt.Errorf("scheduled activity %q ends before it starts", task.GetString("name"))
+			}
+			if !hasPlanRange || start.Before(planStart) {
+				planStart = start
+			}
+			if !hasPlanRange || end.After(planEnd) {
+				planEnd = end
+			}
+			hasPlanRange = true
 		}
 		targetScope := requireStringFromMap(data, "targetScope")
 		if targetScope != "wholeTile" && targetScope != "polygon" {
@@ -700,14 +1079,19 @@ func buildNormalizedSimulationInput(app core.App, plan *core.Record, tile *core.
 			if len(multipliers) == 0 {
 				return nil, fmt.Errorf("fishing activity %q is missing species effort multipliers", task.GetString("name"))
 			}
+			normalizedMultipliers := make(map[string]float64, len(simulationSpecies))
 			for _, species := range simulationSpecies {
 				value, ok := multipliers[species]
-				if !ok || math.IsNaN(value) || math.IsInf(value, 0) || value < 0 {
+				if !ok {
+					value = 1
+				}
+				if math.IsNaN(value) || math.IsInf(value, 0) || value < 0 {
 					return nil, fmt.Errorf("fishing activity %q has invalid effort multiplier for %s", task.GetString("name"), species)
 				}
 				activity.AffectedSpecies = append(activity.AffectedSpecies, species)
+				normalizedMultipliers[species] = value
 			}
-			activity.SpeciesEffortMultipliers = multipliers
+			activity.SpeciesEffortMultipliers = normalizedMultipliers
 		case "construction":
 			construction := optionalMap(data["construction"])
 			category := requireStringFromMap(construction, "category")
@@ -724,6 +1108,23 @@ func buildNormalizedSimulationInput(app core.App, plan *core.Record, tile *core.
 		input.Activities = append(input.Activities, activity)
 	}
 
+	if hasPlanRange {
+		durationDays := daysBetween(planStart, planEnd)
+		if durationDays < 1 {
+			durationDays = 1
+		}
+		ticks := int(math.Ceil(float64(durationDays) / float64(input.TickDurationDays)))
+		if ticks < 1 {
+			ticks = 1
+		}
+
+		input.PlanStart = planStart.Format("2006-01-02")
+		input.PlanEnd = planEnd.Format("2006-01-02")
+		input.DurationDays = durationDays
+		input.SimulationTicks = ticks
+		input.SampleEvery = sampleEveryForSimulationTicks(ticks)
+	}
+
 	return input, nil
 }
 
@@ -737,6 +1138,24 @@ func mergeSimulationOptions(options any, input *normalizedSimulationInput) ([]by
 	}
 	if merged == nil {
 		merged = map[string]any{}
+	}
+
+	if input != nil && input.SimulationTicks > 0 {
+		if _, ok := merged["maxSteps"]; !ok {
+			if _, ok := merged["max_steps"]; !ok {
+				merged["max_steps"] = input.SimulationTicks
+			}
+		}
+		if _, ok := merged["sampleEvery"]; !ok {
+			if _, ok := merged["sample_every"]; !ok {
+				merged["sample_every"] = input.SampleEvery
+			}
+		}
+		if _, ok := merged["tickDurationDays"]; !ok {
+			if _, ok := merged["tick_duration_days"]; !ok {
+				merged["tick_duration_days"] = input.TickDurationDays
+			}
+		}
 	}
 
 	merged["managementPlan"] = input
@@ -1192,6 +1611,8 @@ func main() {
 			if err != nil {
 				return re.InternalServerError("Failed to encode simulation input.", err)
 			}
+			runRawQuery := applySimulationTimelineDefaults(re.Request.URL.RawQuery, normalizedInput)
+			re.Request.URL.RawQuery = runRawQuery
 
 			simulation.Set("inputJson", normalizedInput)
 			simulation.Set("status", "running")
@@ -1213,8 +1634,12 @@ func main() {
 					_ = app.Save(simulation)
 					return err
 				}
-				simulation.Set("status", "completed")
-				return app.Save(simulation)
+				completedSimulation, err := app.FindRecordById("simulations", simRecordId)
+				if err != nil {
+					return re.InternalServerError("Failed to reload completed simulation record.", err)
+				}
+				completedSimulation.Set("status", "completed")
+				return app.Save(completedSimulation)
 			}
 
 			uploadBody, uploadStatus, uploadContentType, err := uploadSimulationMap(
@@ -1224,7 +1649,7 @@ func main() {
 				textureBytes,
 				depthBytes,
 				optionsJSON,
-				re.Request.URL.RawQuery,
+				runRawQuery,
 			)
 			if err != nil {
 				simulation.Set("status", "failed")
@@ -1255,8 +1680,12 @@ func main() {
 				_ = app.Save(simulation)
 				return err
 			}
-			simulation.Set("status", "completed")
-			return app.Save(simulation)
+			completedSimulation, err := app.FindRecordById("simulations", simRecordId)
+			if err != nil {
+				return re.InternalServerError("Failed to reload completed simulation record.", err)
+			}
+			completedSimulation.Set("status", "completed")
+			return app.Save(completedSimulation)
 		})
 
 		e.Router.POST("/simulate/upload", func(re *core.RequestEvent) error {

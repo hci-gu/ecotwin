@@ -14,6 +14,21 @@ import {
   tileAreaKm2,
 } from "@/lib/tile-metrics"
 import {
+  formatPlanDate,
+  getManagementPlanDateRange,
+  isConstantTask,
+  parsePlanDate,
+  taskOffsetsInPlan,
+  type ManagementPlanDateRange,
+} from "@/lib/management-plan-dates"
+import {
+  formatSimulationDate,
+  formatSimulationDateForStep,
+  formatSimulationDateRangeForSteps,
+} from "@/lib/simulation-dates"
+import { ArrowLeft01Icon } from "@hugeicons/core-free-icons"
+import { HugeiconsIcon } from "@hugeicons/react"
+import {
   fetchSimulationByIdAtom,
   fetchSimulationResultByRecordIdAtom,
   fetchTileByIdAtom,
@@ -24,7 +39,14 @@ import {
   simulationsAtom,
   tileByIdCacheAtom,
 } from "@/state/ecotwin-atoms"
-import type { ManagementPlan, Simulation, Task, TaskData, Tile } from "@/state/ecotwin-types"
+import type {
+  ManagementPlan,
+  Simulation,
+  SimulationResultBase64,
+  Task,
+  TaskData,
+  Tile,
+} from "@/state/ecotwin-types"
 import { useAtomValue, useSetAtom } from "jotai"
 import { useEffect, useMemo, useState } from "react"
 import { useNavigate, useParams } from "react-router-dom"
@@ -134,56 +156,123 @@ function activityAccent(type: Task["type"]) {
   }
 }
 
-function parseTimelineDate(value?: string) {
-  if (!value) return null
-  const parsed = new Date(value)
-  return Number.isNaN(parsed.getTime()) ? null : parsed
-}
-
 function taskTypeLabel(type: Task["type"]) {
   return getActivityTypeLabel(type)
 }
 
-function ManagementPlanTimeline({ tasks }: { tasks: Task[] }) {
-  const timelineRows = useMemo(() => {
-    const rows = tasks.map((task, index) => ({
-      task,
-      index,
-      startDate: parseTimelineDate(task.start),
-      endDate: parseTimelineDate(task.end ?? task.start),
-    }))
-    const validDates = rows.flatMap((row) =>
-      [row.startDate, row.endDate].filter((date): date is Date => Boolean(date))
+function inputNumber(input: unknown, key: string) {
+  if (!input || typeof input !== "object" || Array.isArray(input)) return null
+  const value = (input as Record<string, unknown>)[key]
+  return typeof value === "number" && Number.isFinite(value) ? value : null
+}
+
+function inputString(input: unknown, key: string) {
+  if (!input || typeof input !== "object" || Array.isArray(input)) return null
+  const value = (input as Record<string, unknown>)[key]
+  return typeof value === "string" && value.trim() ? value.trim() : null
+}
+
+function timelineRangeFromSimulationInput(
+  input: unknown,
+  tasks: Task[],
+  result?: SimulationResultBase64 | null
+): ManagementPlanDateRange | null {
+  const taskRange = getManagementPlanDateRange(tasks)
+  const startDate = inputString(input, "planStart") ?? taskRange?.startDate
+  const endDate = inputString(input, "planEnd") ?? taskRange?.endDate
+  if (!startDate || !endDate) return taskRange
+
+  const start = parsePlanDate(startDate)
+  const end = parsePlanDate(endDate)
+  if (!start || !end) return taskRange
+
+  const tickDurationDays =
+    inputNumber(input, "tickDurationDays") ??
+    result?.tick_duration_days ??
+    taskRange?.tickDurationDays ??
+    1
+  const durationDays =
+    inputNumber(input, "durationDays") ??
+    taskRange?.durationDays ??
+    Math.max(
+      1,
+      Math.round((end.getTime() - start.getTime()) / (24 * 60 * 60 * 1000))
     )
-    const minTime = validDates.length ? Math.min(...validDates.map((date) => date.getTime())) : 0
-    const maxTime = validDates.length ? Math.max(...validDates.map((date) => date.getTime())) : 1
-    const timeSpan = maxTime === minTime ? 1 : maxTime - minTime
+  const simulationTicks =
+    inputNumber(input, "simulationTicks") ??
+    result?.episode_length ??
+    taskRange?.simulationTicks ??
+    Math.max(1, Math.ceil(durationDays / tickDurationDays))
+  const sampleEvery =
+    inputNumber(input, "sampleEvery") ??
+    result?.sample_every ??
+    taskRange?.sampleEvery ??
+    1
+
+  return {
+    startDate: formatPlanDate(startDate),
+    endDate: formatPlanDate(endDate),
+    durationDays,
+    tickDurationDays,
+    simulationTicks,
+    sampleEvery,
+  }
+}
+
+function ManagementPlanTimeline({
+  tasks,
+  range,
+}: {
+  tasks: Task[]
+  range: ManagementPlanDateRange | null
+}) {
+  const timelineRows = useMemo(() => {
+    if (!range) {
+      return {
+        rangeLabel: "No dated activities",
+        rows: tasks.map((task, index) => ({
+          task,
+          left: tasks.length ? (index / tasks.length) * 100 : 0,
+          width: tasks.length ? 100 / tasks.length : 100,
+          dateLabel: isConstantTask(task) ? "Constant" : "Unscheduled",
+          accent: activityAccent(task.type),
+        })),
+      }
+    }
+
+    const rangeLabel = `${range.startDate} to ${range.endDate} · ${range.durationDays} days`
 
     return {
-      rangeLabel: validDates.length
-        ? `${new Date(minTime).toISOString().slice(0, 10)} to ${new Date(maxTime).toISOString().slice(0, 10)}`
-        : "No dated activities",
-      rows: rows.map((row) => {
-        const fallbackStart = tasks.length ? row.index / tasks.length : 0
-        const fallbackEnd = tasks.length ? (row.index + 1) / tasks.length : 1
-        const startRatio = row.startDate
-          ? (row.startDate.getTime() - minTime) / timeSpan
-          : fallbackStart
-        const endRatio = row.endDate
-          ? (row.endDate.getTime() - minTime) / timeSpan
-          : fallbackEnd
+      rangeLabel,
+      rows: tasks.map((task) => {
+        const offsets = taskOffsetsInPlan(task, range)
+        const startDay = offsets?.startDay ?? 0
+        const endDay = offsets?.endDay ?? range.durationDays
+        const startRatio = startDay / range.durationDays
+        const endRatio = endDay / range.durationDays
         const left = Math.max(0, Math.min(startRatio, endRatio) * 100)
-        const width = Math.max(8, Math.min(100 - left, Math.abs(endRatio - startRatio) * 100))
+        const width = Math.max(
+          2,
+          Math.min(100 - left, Math.abs(endRatio - startRatio) * 100)
+        )
 
         return {
-          task: row.task,
+          task,
           left,
           width,
-          accent: activityAccent(row.task.type),
+          dateLabel: offsets
+            ? formatSimulationDateRangeForSteps(
+                offsets.startTick,
+                offsets.endTick,
+                range.startDate,
+                range.tickDurationDays
+              ) ?? `${formatPlanDate(task.start)} to ${formatPlanDate(task.end)}`
+            : "Unscheduled",
+          accent: activityAccent(task.type),
         }
       }),
     }
-  }, [tasks])
+  }, [range, tasks])
 
   return (
     <div className="rounded-md bg-white/70 p-3 ring-1 ring-black/5">
@@ -194,24 +283,31 @@ function ManagementPlanTimeline({ tasks }: { tasks: Task[] }) {
 
       <div className="mt-4 space-y-3">
         {timelineRows.rows.length ? (
-          timelineRows.rows.map(({ task, left, width, accent }) => (
+          timelineRows.rows.map(({ task, left, width, dateLabel, accent }) => (
             <div key={task.id} className="grid gap-2 sm:grid-cols-[10rem_1fr]">
               <div className="min-w-0">
                 <div className="truncate text-xs font-medium text-zinc-900">{task.name || "Untitled activity"}</div>
                 <div className="mt-1 text-[11px] text-zinc-500">
                   {taskTypeLabel(task.type)} · {taskTiming(task)}
                 </div>
+                <div className="mt-0.5 text-[10px] text-zinc-400">{dateLabel}</div>
               </div>
-              <div className="relative h-9 rounded-md bg-zinc-100 ring-1 ring-inset ring-zinc-200">
-                <div
-                  className="absolute top-2 h-5 rounded-md border"
-                  style={{
-                    left: `${left}%`,
-                    width: `${width}%`,
-                    backgroundColor: accent.backgroundColor,
-                    borderColor: accent.borderColor,
-                  }}
-                />
+              <div>
+                <div className="grid grid-cols-[44px_1fr_14px]">
+                  <div />
+                  <div className="relative h-9 rounded-md bg-zinc-100 ring-1 ring-inset ring-zinc-200">
+                    <div
+                      className="absolute top-2 h-5 rounded-md border"
+                      style={{
+                        left: `${left}%`,
+                        width: `${width}%`,
+                        backgroundColor: accent.backgroundColor,
+                        borderColor: accent.borderColor,
+                      }}
+                    />
+                  </div>
+                  <div />
+                </div>
               </div>
             </div>
           ))
@@ -248,7 +344,7 @@ export function SimulationReportPage() {
   const plan = simulation?.expand?.plan as ManagementPlan | undefined
   const tile = plan?.expand?.tile ?? (tileId ? tileByIdCache[tileId] : null)
   const result = simulationId ? simulationResultByRecordId[simulationId] ?? null : null
-  const tasks = plan?.expand?.tasks ?? []
+  const tasks = useMemo(() => plan?.expand?.tasks ?? [], [plan?.expand?.tasks])
 
   useEffect(() => {
     if (!simulationId || simulation) return
@@ -276,6 +372,23 @@ export function SimulationReportPage() {
 
   const resultRows = useMemo(() => simulationResultRows(result), [result])
   const speciesSummaries = useMemo(() => summarizeSpecies(result), [result])
+  const timelineRange = useMemo(
+    () => timelineRangeFromSimulationInput(simulation?.inputJson, tasks, result),
+    [result, simulation?.inputJson, tasks]
+  )
+  const finalSnapshotLabel = useMemo(() => {
+    const lastStep = result?.steps?.at(-1)
+    if (typeof lastStep === "number") {
+      return (
+        formatSimulationDateForStep(
+          lastStep,
+          result?.start_date,
+          result?.tick_duration_days
+        ) ?? formatSimulationDate(result?.end_date)
+      )
+    }
+    return formatSimulationDate(result?.end_date)
+  }, [result])
 
   function handleExportPdf() {
     if (!simulation || !result) {
@@ -299,15 +412,16 @@ export function SimulationReportPage() {
   }
 
   return (
-    <section className="simulation-report-page absolute inset-x-0 bottom-0 top-[4.5rem] z-30 overflow-auto bg-[#f5f5f2] p-pane">
-      <div className="simulation-report-document mx-auto max-w-5xl rounded-pane bg-white p-6 shadow-sm ring-1 ring-zinc-200 sm:p-8">
+    <section className="simulation-report-page absolute inset-x-0 bottom-0 top-[4.5rem] z-30 overflow-auto bg-white p-pane">
+      <div className="simulation-report-document mx-auto max-w-5xl bg-white p-6 sm:p-8">
         <div className="flex flex-wrap items-start justify-between gap-4">
           <div>
             <button
               type="button"
               onClick={() => navigate(tileId && simulationId ? `/tile/${tileId}/simulation/${simulationId}` : "/simulations")}
-              className="report-print-hidden text-sm font-medium text-zinc-500 hover:text-zinc-950"
+              className="report-print-hidden inline-flex items-center gap-1.5 text-sm font-medium text-zinc-500 hover:text-zinc-950"
             >
+              <HugeiconsIcon icon={ArrowLeft01Icon} size={16} />
               Back to results
             </button>
             <h1 className="mt-4 text-3xl font-medium text-zinc-950">Simulation report</h1>
@@ -337,7 +451,49 @@ export function SimulationReportPage() {
           </div>
         ) : null}
 
-        <div className="mt-8 grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
+        <div className="report-no-break mt-10 grid gap-8 border-y border-zinc-200 py-6 lg:grid-cols-[16rem_1fr]">
+          <div>
+            <h2 className="text-sm font-semibold uppercase tracking-[0.18em] text-zinc-500">
+              Contents
+            </h2>
+            <div className="mt-4 space-y-2 text-sm">
+              {[
+                ["01", "Simulation overview"],
+                ["02", "Management plan"],
+                ["03", "Results"],
+                ["04", "Biomass and timeline"],
+              ].map(([number, label]) => (
+                <div key={number} className="flex items-baseline gap-3">
+                  <span className="w-7 text-xs font-semibold text-zinc-400">{number}</span>
+                  <span className="flex-1 border-b border-dotted border-zinc-300" />
+                  <span className="font-medium text-zinc-800">{label}</span>
+                </div>
+              ))}
+            </div>
+          </div>
+
+          <div>
+            <h2 className="text-lg font-semibold text-zinc-950">Executive summary</h2>
+            <div className="mt-3 space-y-3 text-sm leading-6 text-zinc-600">
+              <p>
+                This draft report summarises the selected management plan, the aligned
+                simulation period, and the projected biomass response for the selected
+                tile. The narrative text here is placeholder copy for the final
+                assessment and can be replaced once the review language is agreed.
+              </p>
+              <p>
+                The current layout is intended to read as an export-ready report:
+                overview details first, followed by the planned interventions, model
+                outputs, and the management timeline used to align the simulation.
+              </p>
+            </div>
+          </div>
+        </div>
+
+        <div id="simulation-overview" className="mt-8">
+          <h2 className="text-lg font-semibold text-zinc-950">01 Simulation overview</h2>
+        </div>
+        <div className="mt-4 grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
           {[
             ["Simulation", simulation?.id ?? "Loading..."],
             ["Status", simulationStatus(simulation)],
@@ -352,8 +508,8 @@ export function SimulationReportPage() {
         </div>
 
         <div className="mt-8 grid gap-8 lg:grid-cols-[1fr_1.2fr]">
-          <div>
-            <h2 className="text-lg font-semibold text-zinc-950">Management plan</h2>
+          <div id="management-plan">
+            <h2 className="text-lg font-semibold text-zinc-950">02 Management plan</h2>
             <div className="mt-4 space-y-4">
               {tasks.length ? (
                 tasks.map((task) => (
@@ -373,8 +529,8 @@ export function SimulationReportPage() {
             </div>
           </div>
 
-          <div>
-            <h2 className="text-lg font-semibold text-zinc-950">Results</h2>
+          <div id="results">
+            <h2 className="text-lg font-semibold text-zinc-950">03 Results</h2>
             <div className="mt-4">
               {result ? (
                 <BiomassChart result={result} height={300} />
@@ -418,15 +574,15 @@ export function SimulationReportPage() {
                   </table>
                 </div>
                 <div className="mt-3 rounded-md bg-zinc-50 px-3 py-2 text-sm text-zinc-600">
-                  Final result snapshot: step {result?.steps?.at(-1) ?? "unknown"}.
+                  Final result snapshot: {finalSnapshotLabel ?? "final sample"}.
                 </div>
               </div>
             ) : null}
           </div>
         </div>
 
-        <div className="report-print-break mt-8">
-          <h2 className="text-lg font-semibold text-zinc-950">Biomass and management timeline</h2>
+        <div id="biomass-timeline" className="report-print-break mt-8">
+          <h2 className="text-lg font-semibold text-zinc-950">04 Biomass and management timeline</h2>
           <div className="report-no-break mt-4 rounded-lg border border-zinc-200 bg-zinc-50 p-4">
             {result ? (
               <BiomassChart result={result} height={260} />
@@ -436,16 +592,9 @@ export function SimulationReportPage() {
               </div>
             )}
             <div className="mt-4">
-              <ManagementPlanTimeline tasks={tasks} />
+              <ManagementPlanTimeline tasks={tasks} range={timelineRange} />
             </div>
           </div>
-        </div>
-
-        <div className="report-print-break mt-8">
-          <h2 className="text-lg font-semibold text-zinc-950">Normalized input</h2>
-          <pre className="mt-4 max-h-96 overflow-auto rounded-lg bg-zinc-950 p-4 text-xs leading-5 text-zinc-100">
-            {JSON.stringify(simulation?.inputJson ?? simulation?.options ?? {}, null, 2)}
-          </pre>
         </div>
       </div>
     </section>

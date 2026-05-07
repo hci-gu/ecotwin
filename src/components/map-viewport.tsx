@@ -29,6 +29,10 @@ import {
   type TileMarkerDatum,
   type ZoomedTileLabelDatum,
 } from "@/map-layers"
+import {
+  formatSimulationDate,
+  formatSimulationDateForStep,
+} from "@/lib/simulation-dates"
 import { tileSelectionCandidateFromLngLat } from "@/lib/tile-selection"
 import {
   activityAreaDrawingActiveAtom,
@@ -377,7 +381,18 @@ export function MapViewport() {
       latMax: topLeft.lat,
     }
 
-    return { data, steps, h, w, s, species, bounds }
+    return {
+      data,
+      steps,
+      h,
+      w,
+      s,
+      species,
+      bounds,
+      startDate: result.start_date,
+      endDate: result.end_date,
+      tickDurationDays: result.tick_duration_days,
+    }
   }, [getTileById, routeSimulationId, routeTileId, simulationResultByRecordId])
 
   const biomassOverlay = useMemo<BiomassOverlayFrame | null>(() => {
@@ -401,11 +416,25 @@ export function MapViewport() {
     const currentFrame = Math.max(0, Math.min(Math.floor(simulationStep), frameCount - 1))
     const currentStep = biomassBase.steps[currentFrame] ?? 0
     const lastStep = biomassBase.steps[frameCount - 1] ?? currentStep
+    const currentDate = formatSimulationDateForStep(
+      currentStep,
+      biomassBase.startDate,
+      biomassBase.tickDurationDays
+    )
+    const lastDate =
+      formatSimulationDate(biomassBase.endDate) ??
+      formatSimulationDateForStep(
+        lastStep,
+        biomassBase.startDate,
+        biomassBase.tickDurationDays
+      )
     return {
       frameCount,
       currentFrame,
       currentStep,
       lastStep,
+      currentDate,
+      lastDate,
       speciesCount: biomassBase.s,
       gridLabel: `${biomassBase.w}x${biomassBase.h}`,
     }
@@ -1128,9 +1157,12 @@ export function MapViewport() {
                 Biomass loaded
               </div>
               <div className="mt-1 text-[10px] leading-4 text-zinc-600">
-                {biomassOverlaySummary.frameCount} frames · {biomassOverlaySummary.speciesCount} species
+                {biomassOverlaySummary.frameCount} samples · {biomassOverlaySummary.speciesCount} species
                 <br />
-                step {biomassOverlaySummary.currentStep} / {biomassOverlaySummary.lastStep} · grid{" "}
+                {biomassOverlaySummary.currentDate && biomassOverlaySummary.lastDate
+                  ? `${biomassOverlaySummary.currentDate} / ${biomassOverlaySummary.lastDate}`
+                  : `sample ${biomassOverlaySummary.currentFrame + 1} / ${biomassOverlaySummary.frameCount}`}{" "}
+                · grid{" "}
                 {biomassOverlaySummary.gridLabel}
               </div>
             </div>

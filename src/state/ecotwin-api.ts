@@ -145,6 +145,12 @@ export async function fetchSimulationResult(
     max_steps?: number
     sampleEvery?: number
     sample_every?: number
+    tickDurationDays?: number
+    tick_duration_days?: number
+    startDate?: string
+    start_date?: string
+    endDate?: string
+    end_date?: string
     includeFinal?: boolean
     include_final?: boolean
     modelPath?: string

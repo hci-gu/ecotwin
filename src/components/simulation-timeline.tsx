@@ -1,14 +1,27 @@
 import { useEffect, useMemo } from "react"
 import { useAtom } from "jotai"
 
+import {
+  formatSimulationDate,
+  formatSimulationDateForStep,
+} from "@/lib/simulation-dates"
 import { simulationPlayingAtom, simulationStepAtom } from "@/state/simulation-ui-state"
 
 type SimulationTimelineProps = {
   steps: number[]
   episodeLength: number
+  startDate?: string | null
+  endDate?: string | null
+  tickDurationDays?: number | null
 }
 
-export function SimulationTimeline({ steps, episodeLength }: SimulationTimelineProps) {
+export function SimulationTimeline({
+  steps,
+  episodeLength,
+  startDate,
+  endDate,
+  tickDurationDays,
+}: SimulationTimelineProps) {
   const sampledSteps = useMemo(() => {
     const normalized = steps
       .map((step) => Number(step))
@@ -24,6 +37,22 @@ export function SimulationTimeline({ steps, episodeLength }: SimulationTimelineP
   const [frame, setFrame] = useAtom(simulationStepAtom)
   const clampedFrame = Math.max(0, Math.min(frame, maxFrame))
   const currentStep = sampledSteps[clampedFrame] ?? 0
+  const currentDateLabel = formatSimulationDateForStep(
+    currentStep,
+    startDate,
+    tickDurationDays
+  )
+  const endDateLabel =
+    formatSimulationDate(endDate) ??
+    formatSimulationDateForStep(
+      sampledSteps[maxFrame] ?? maxEpisodeStep,
+      startDate,
+      tickDurationDays
+    )
+  const dateProgressLabel =
+    currentDateLabel && endDateLabel
+      ? `${currentDateLabel} / ${endDateLabel}`
+      : null
 
   useEffect(() => {
     setPlaying(false)
@@ -72,7 +101,8 @@ export function SimulationTimeline({ steps, episodeLength }: SimulationTimelineP
       </div>
 
       <div className="shrink-0 text-[11px] tabular-nums text-zinc-700">
-        frame {clampedFrame} / {maxFrame} · step {currentStep} / {maxEpisodeStep}
+        sample {clampedFrame + 1} / {maxFrame + 1}
+        {dateProgressLabel ? ` · ${dateProgressLabel}` : null}
       </div>
     </div>
   )
