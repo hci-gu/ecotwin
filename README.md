@@ -7,7 +7,6 @@ ECOTWIN is a map-based ecological digital twin prototype. The current app lets u
 - `src/` - React/Vite frontend.
 - `pocketbase/` - PocketBase app, schema migrations, custom hooks, and simulation proxy endpoints.
 - `services/tile-populator/` - worker that populates tile landcover and ocean data assets.
-- `services/mock-simulation/` - local mock simulation service for development.
 
 ## Local Development
 
@@ -20,12 +19,6 @@ pnpm dev:pocketbase
 pnpm dev:tile-populator
 ```
 
-For a fully local simulation path, run PocketBase in mock mode:
-
-```bash
-pnpm dev:pocketbase:mock
-```
-
 ## Environment
 
 Common environment variables:
@@ -36,7 +29,7 @@ Common environment variables:
 - `TILE_POPULATOR_PB_EMAIL` / `TILE_POPULATOR_PB_PASSWORD` - superuser credentials for the worker.
 - `GOOGLE_EARTH_ENGINE_CREDENTIALS_PATH` or `GOOGLE_EARTH_ENGINE_CREDENTIALS_JSON` - Earth Engine credentials.
 - `TILE_POPULATOR_GEOTIFF_PATH` - local GeoTIFF used for depth generation.
-- `SIMULATION_MOCK=1` - enables PocketBase mock simulation responses.
+- `SIMULATION_INFERENCE_URL` - MARELD inference API URL for PocketBase, default `http://localhost:8000`.
 
 Use `services/tile-populator/.env.example` as the worker environment template.
 

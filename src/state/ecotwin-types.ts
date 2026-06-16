@@ -160,6 +160,23 @@ export type TaskData = {
     description?: string
   }
   area?: unknown
+  areas?: Array<{
+    area?: unknown
+    areaSummary?: {
+      areaKm2?: number
+      vertexCount?: number
+      centroid?: {
+        lat?: number
+        lng?: number
+      }
+      bbox?: {
+        minLng?: number
+        minLat?: number
+        maxLng?: number
+        maxLat?: number
+      }
+    }
+  }>
   areaSummary?: {
     areaKm2?: number
     vertexCount?: number

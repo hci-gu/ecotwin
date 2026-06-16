@@ -10,6 +10,7 @@ import {
   simulationsLoadingAtom,
 } from "@/state/ecotwin-atoms"
 import type { Simulation } from "@/state/ecotwin-types"
+import { t } from "@/lib/translations"
 import { useAtomValue, useSetAtom } from "jotai"
 import { useEffect, useMemo, useState } from "react"
 import { useNavigate } from "react-router-dom"
@@ -39,11 +40,11 @@ function toSimulationRow(simulation: Simulation): SimulationRow {
   return {
     simulation,
     tileId: tile?.id ?? plan?.tile,
-    tileName: tile?.name?.trim() || "Unknown tile",
-    planName: plan?.name?.trim() || "Unknown plan",
-    createdDate: simulation.created?.substring(0, 10) || "Unknown date",
+    tileName: tile?.name?.trim() || t("common.unknownTile"),
+    planName: plan?.name?.trim() || t("common.unknownPlan"),
+    createdDate: simulation.created?.substring(0, 10) || t("common.unknownDate"),
     status: simulationStatus(simulation),
-    resultLabel: hasResult ? "Result cached" : "No result",
+    resultLabel: hasResult ? t("simulations.resultCached") : t("simulations.noResult"),
   }
 }
 
@@ -84,7 +85,7 @@ export function SimulationsPage() {
         simulationRecordId: simulation.id,
         forceRun: true,
       })
-      if (!result) throw new Error("Simulation run did not return a result.")
+      if (!result) throw new Error(t("simulations.runDidNotReturnResult"))
       await refreshSimulations()
     } catch (err) {
       setRunError(err instanceof Error ? err.message : String(err))
@@ -95,7 +96,7 @@ export function SimulationsPage() {
 
   async function handleDeleteSimulation(simulation: Simulation) {
     const confirmed = window.confirm(
-      "Delete this simulation and its cached result files? This cannot be undone."
+      t("simulations.deleteConfirm")
     )
     if (!confirmed) return
 
@@ -117,9 +118,9 @@ export function SimulationsPage() {
         <div className="mx-auto flex h-full w-full max-w-7xl flex-col">
           <div className="flex items-start justify-between gap-4">
             <div>
-              <h1 className="text-[2rem] font-medium text-zinc-950">Simulations</h1>
+              <h1 className="text-[2rem] font-medium text-zinc-950">{t("common.simulations")}</h1>
               <p className="mt-1 text-sm text-zinc-500">
-                Browse simulation runs and open completed results on their tile route.
+                {t("simulations.browseRuns")}
               </p>
             </div>
             <Button
@@ -129,25 +130,25 @@ export function SimulationsPage() {
               onClick={() => void refreshSimulations()}
               className="mt-1 rounded-lg bg-white px-3 text-sm text-zinc-700 shadow-sm"
             >
-              {loading ? "Loading..." : "Reload"}
+              {loading ? t("common.loading") : t("common.reload")}
             </Button>
           </div>
 
           {error ? (
             <div className="mt-6 rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
-              Failed to load simulations: {error.message}
+              {t("simulations.failedToLoad", { message: error.message })}
             </div>
           ) : null}
 
           {runError ? (
             <div className="mt-6 rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
-              Failed to run simulation: {runError}
+              {t("simulations.failedToRun", { message: runError })}
             </div>
           ) : null}
 
           {deleteError ? (
             <div className="mt-6 rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
-              Failed to delete simulation: {deleteError}
+              {t("simulations.failedToDelete", { message: deleteError })}
             </div>
           ) : null}
 
@@ -156,14 +157,14 @@ export function SimulationsPage() {
               <table className="min-w-full table-fixed">
                 <thead className="sticky top-0 z-10">
                   <tr className="border-b border-zinc-200 bg-white text-left text-sm text-zinc-800">
-                    <th className="px-4 py-3 font-medium">Simulation</th>
-                    <th className="px-4 py-3 font-medium">Runner id</th>
-                    <th className="px-4 py-3 font-medium">Tile</th>
-                    <th className="px-4 py-3 font-medium">Plan</th>
-                    <th className="px-4 py-3 font-medium">Created</th>
-                    <th className="px-4 py-3 font-medium">Status</th>
-                    <th className="px-4 py-3 font-medium">Result</th>
-                    <th className="px-4 py-3 font-medium">Actions</th>
+                    <th className="px-4 py-3 font-medium">{t("common.simulation")}</th>
+                    <th className="px-4 py-3 font-medium">{t("simulations.runnerId")}</th>
+                    <th className="px-4 py-3 font-medium">{t("common.tile")}</th>
+                    <th className="px-4 py-3 font-medium">{t("common.plan")}</th>
+                    <th className="px-4 py-3 font-medium">{t("common.created")}</th>
+                    <th className="px-4 py-3 font-medium">{t("common.status")}</th>
+                    <th className="px-4 py-3 font-medium">{t("report.results")}</th>
+                    <th className="px-4 py-3 font-medium">{t("common.actions")}</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -177,7 +178,7 @@ export function SimulationsPage() {
                           </td>
                           <td className="px-4 py-5 align-top text-sm text-zinc-600">
                             <span className="block max-w-[12rem] truncate">
-                              {row.simulation.simulationId ?? "Not uploaded"}
+                              {row.simulation.simulationId ?? t("simulations.notUploaded")}
                             </span>
                           </td>
                           <td className="px-4 py-5 align-top text-sm text-zinc-600">{row.tileName}</td>
@@ -197,7 +198,7 @@ export function SimulationsPage() {
                                 }
                                 className="text-zinc-700 transition-colors hover:text-zinc-950 disabled:text-zinc-300"
                               >
-                                Open
+                                {t("common.open")}
                               </button>
                               <button
                                 type="button"
@@ -205,7 +206,7 @@ export function SimulationsPage() {
                                 onClick={() => void handleRerun(row.simulation)}
                                 className="text-zinc-700 transition-colors hover:text-zinc-950 disabled:text-zinc-300"
                               >
-                                {rerunningId === row.simulation.id ? "Running..." : "Rerun"}
+                                {rerunningId === row.simulation.id ? t("simulations.rerunning") : t("simulations.rerun")}
                               </button>
                               <button
                                 type="button"
@@ -217,7 +218,7 @@ export function SimulationsPage() {
                                 }
                                 className="text-zinc-700 transition-colors hover:text-zinc-950 disabled:text-zinc-300"
                               >
-                                Report
+                                {t("report.title")}
                               </button>
                               <button
                                 type="button"
@@ -225,7 +226,7 @@ export function SimulationsPage() {
                                 onClick={() => void handleDeleteSimulation(row.simulation)}
                                 className="text-red-600 transition-colors hover:text-red-700 disabled:text-red-300"
                               >
-                                {deletingId === row.simulation.id ? "Deleting..." : "Delete"}
+                                {deletingId === row.simulation.id ? t("common.deleting") : t("common.delete")}
                               </button>
                             </div>
                           </td>
@@ -235,7 +236,7 @@ export function SimulationsPage() {
                   ) : (
                     <tr>
                       <td colSpan={8} className="px-4 py-12 text-center text-sm text-zinc-500">
-                        {loading ? "Loading simulations..." : "No simulations found."}
+                        {loading ? t("simulations.loadingSimulations") : t("simulations.noSimulationsFound")}
                       </td>
                     </tr>
                   )}

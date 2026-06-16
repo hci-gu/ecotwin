@@ -6,6 +6,7 @@ import {
 } from "@hugeicons/core-free-icons"
 import type { TileStatusTone } from "@/lib/tile-population"
 import { cn } from "@/lib/utils"
+import { t } from "@/lib/translations"
 import { Separator } from "@/components/ui/separator"
 
 type AccordionProps = {
@@ -43,9 +44,9 @@ type TileDetailsProps = {
 
 export function TileDetails({
   name,
-  status = "Ready to run",
+  status = t("assets.readyToRun"),
   statusTone = "success",
-  createdDate = "Unknown date",
+  createdDate = t("common.unknownDate"),
   simulationInfoContent,
   managementPlansContent,
   landcoverContent,
@@ -70,7 +71,7 @@ export function TileDetails({
           <span className="text-xs font-medium text-zinc-700">{status}</span>
         </div>
         <div className="text-[11px] text-zinc-500">
-          Created: {createdDate}
+          {t("common.created")}: {createdDate}
         </div>
       </div>
 
@@ -79,13 +80,13 @@ export function TileDetails({
       {/* Accordions */}
       <div className="divide-y divide-black/5">
         {simulationInfoContent && (
-          <Accordion title="Simulation info">
+          <Accordion title={t("tileDetails.simulationInfo")}>
             <div className="pb-4">{simulationInfoContent}</div>
           </Accordion>
         )}
 
         {managementPlansContent && (
-          <Accordion title="Management plans" defaultOpen={false}>
+          <Accordion title={t("tileDetails.managementPlans")} defaultOpen={false}>
             <div className="pb-4">
               {managementPlansContent}
             </div>
@@ -93,7 +94,7 @@ export function TileDetails({
         )}
 
         {landcoverContent && (
-          <Accordion title="Landcover" defaultOpen={false}>
+          <Accordion title={t("common.landcover")} defaultOpen={false}>
             <div className="pb-4">
               {landcoverContent}
             </div>
@@ -101,7 +102,7 @@ export function TileDetails({
         )}
 
         {oceanDataContent && (
-          <Accordion title="Ocean data" defaultOpen={false}>
+          <Accordion title={t("common.oceanData")} defaultOpen={false}>
             <div className="pb-4">
               {oceanDataContent}
             </div>

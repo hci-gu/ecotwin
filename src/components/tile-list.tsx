@@ -1,6 +1,7 @@
 import { useEcotwinState } from "@/state/use-ecotwin-state"
 import { useNavigate } from "react-router-dom"
 import { cn } from "@/lib/utils"
+import { t } from "@/lib/translations"
 
 type TileListProps = {
   selectedTileId?: string | null
@@ -26,16 +27,16 @@ export function TileList({
     <div className="flex min-h-0 flex-1 flex-col overflow-hidden">
       <div className="shrink-0 border-b border-black/5 bg-white/45 px-4 py-3 backdrop-blur-sm">
         <div className="flex items-baseline justify-between gap-3">
-          <h2 className="text-sm font-semibold text-zinc-950">Tiles</h2>
+          <h2 className="text-sm font-semibold text-zinc-950">{t("tiles.tiles")}</h2>
           <span className="text-[11px] font-medium text-zinc-500">
-            {tiles?.items.length ?? 0} active
+            {t("tiles.activeCount", { count: tiles?.items.length ?? 0 })}
           </span>
         </div>
       </div>
 
       <div className="min-h-0 flex-1 overflow-auto p-4">
         <div className="mb-3 text-[10px] font-bold uppercase tracking-wider text-zinc-400">
-          Active tiles
+          {t("tiles.activeTiles")}
         </div>
 
         {tilesError ? (
@@ -45,7 +46,7 @@ export function TileList({
         ) : null}
 
         {tilesLoading && !tiles ? (
-          <div className="mb-4 text-sm text-zinc-500">Loading tiles…</div>
+          <div className="mb-4 text-sm text-zinc-500">{t("tiles.loadingTiles")}</div>
         ) : null}
 
         {tiles ? (
@@ -56,7 +57,7 @@ export function TileList({
               // Use created date if available, formatted to YYYY-MM-DD
               const createdDate = tile.created
                 ? tile.created.substring(0, 10)
-                : "Unknown date"
+                : t("common.unknownDate")
 
               return (
                 <div
@@ -75,14 +76,14 @@ export function TileList({
                 >
                   <div className="flex items-start justify-between gap-4">
                     <div className="font-medium text-zinc-900">
-                      {tile.name || "Untitled tile"}
+                      {tile.name || t("common.untitledTile")}
                     </div>
                     <div className="whitespace-nowrap text-xs text-zinc-600 group-hover:underline">
-                      View details
+                      {t("tiles.viewDetails")}
                     </div>
                   </div>
                   <div className="mt-2 text-xs text-zinc-500">
-                    Created: {createdDate}
+                    {t("common.created")}: {createdDate}
                   </div>
                 </div>
               )
@@ -100,7 +101,7 @@ export function TileList({
               : "bg-zinc-900 text-white hover:bg-zinc-800"
           )}
         >
-          {createModeActive ? "Selecting new location..." : "Create Location +"}
+          {createModeActive ? t("tiles.selectingNewLocation") : t("tiles.createLocationPlus")}
         </button>
       </div>
     </div>

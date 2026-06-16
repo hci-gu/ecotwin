@@ -10,6 +10,8 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"path/filepath"
+	"strings"
 
 	"github.com/dghubble/sling"
 )
@@ -24,7 +26,38 @@ func firstNonEmptyEnv(keys ...string) string {
 		}
 	}
 
+	envFiles := []string{".env", "../.env"}
+	for _, file := range envFiles {
+		values := readDotEnv(file)
+		for _, key := range keys {
+			if value := values[key]; value != "" {
+				return value
+			}
+		}
+	}
+
 	return ""
+}
+
+func readDotEnv(file string) map[string]string {
+	data, err := os.ReadFile(filepath.Clean(file))
+	if err != nil {
+		return nil
+	}
+
+	values := map[string]string{}
+	for _, line := range strings.Split(string(data), "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" || strings.HasPrefix(line, "#") {
+			continue
+		}
+		key, value, ok := strings.Cut(line, "=")
+		if !ok {
+			continue
+		}
+		values[strings.TrimSpace(key)] = strings.Trim(strings.TrimSpace(value), `"'`)
+	}
+	return values
 }
 
 func DownloadTile(x int, y int, zoom int, typeStr string) image.Image {
@@ -85,7 +118,7 @@ func ReadDistanceTable() (map[string]map[string]float64, error) {
 	filePath := os.Getenv("DISTANCE_TABLE_PATH")
 	if filePath == "" {
 		// Default path when not specified by the environment variable
-		filePath = "./distance_table.json"
+		filePath = "./lib/mapbox/distance_table.json"
 	}
 	file, err := os.Open(filePath)
 	if err != nil {

@@ -1,4 +1,5 @@
 import { AppLayout } from "@/layouts/app-layout"
+import { DemoPage } from "@/pages/demo-page"
 import { ManagementPlansPage } from "@/pages/management-plans-page"
 import { MapPage } from "@/pages/map-page"
 import { SimulationReportPage } from "@/pages/simulation-report-page"
@@ -11,6 +12,7 @@ export function App() {
     <Routes>
       <Route element={<AppLayout />}>
         <Route index element={<MapPage />} />
+        <Route path="demo" element={<DemoPage />} />
         <Route path="tile/:tileId" element={<TilePage />} />
         <Route path="tile/:tileId/simulation/:simulationId/report" element={<SimulationReportPage />} />
         <Route path="tile/:tileId/simulation/:simulationId" element={<TilePage />} />

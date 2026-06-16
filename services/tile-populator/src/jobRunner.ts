@@ -152,7 +152,7 @@ async function backfillTilePopulation(pb: PocketBase) {
 
   for (const tile of tiles) {
     if (!tile.landcover) {
-      if (tile.landcoverStatus !== TILE_STATUS_PROCESSING && tile.landcoverStatus !== TILE_STATUS_FAILED) {
+      if (tile.landcoverStatus !== TILE_STATUS_PROCESSING) {
         await updateTileStatuses(pb, tile, { landcoverStatus: TILE_STATUS_PENDING })
       }
       await ensurePopulationJob(pb, tile.id, LANDCOVER_JOB_KIND)

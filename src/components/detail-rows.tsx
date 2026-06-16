@@ -1,11 +1,12 @@
 import type { DetailRow } from "@/lib/tile-metrics"
+import { t } from "@/lib/translations"
 
 type DetailRowsProps = {
   rows: DetailRow[]
   emptyLabel?: string
 }
 
-export function DetailRows({ rows, emptyLabel = "No details available." }: DetailRowsProps) {
+export function DetailRows({ rows, emptyLabel = t("detailRows.empty") }: DetailRowsProps) {
   if (!rows.length) {
     return <div className="text-xs text-zinc-500">{emptyLabel}</div>
   }

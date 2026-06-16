@@ -70,6 +70,7 @@ import {
 } from "react-router-dom"
 import { HugeiconsIcon } from "@hugeicons/react"
 import { ArrowDown01Icon } from "@hugeicons/core-free-icons"
+import { t, tc } from "@/lib/translations"
 
 const speciesSwatchColors = [
   "#fbbf24",
@@ -104,6 +105,16 @@ function isNotFoundError(err: unknown) {
     (typeof maybeError.message === "string" &&
       maybeError.message.toLowerCase().includes("wasn't found"))
   )
+}
+
+function taskHasPolygonArea(data: { area?: unknown; areas?: unknown } | undefined) {
+  if (!data) return false
+  if (data.area) return true
+  if (!Array.isArray(data.areas)) return false
+  return data.areas.some((areaItem) => {
+    if (!areaItem || typeof areaItem !== "object" || Array.isArray(areaItem)) return false
+    return Boolean((areaItem as { area?: unknown }).area)
+  })
 }
 
 async function deleteIfPresent(deleteRecord: (id: string) => Promise<unknown>, id: string) {
@@ -257,7 +268,7 @@ export function TilePage() {
     void fetchSimulationResultByRecordId({
       simulationRecordId: activeSimulationId,
       cachedOnly: true,
-    })
+    }).catch(() => {})
   }, [
     activeSimulation?.resultJson,
     activeSimulationId,
@@ -410,44 +421,44 @@ export function TilePage() {
   }, [activePlan, activePlanId, activeSimulation?.plan, fetchManagementPlanById])
 
   const planValidationError = useMemo(() => {
-    if (!activePlan) return "Select a management plan for this tile before running a simulation."
+    if (!activePlan) return t("validation.selectPlanBeforeSimulation")
     if (!tile?.landcover) return landcoverStatusMessage(tile)
     if (!tile?.oceanData) return oceanDataStatusMessage(tile)
 
     const tasks = activePlan.expand?.tasks ?? []
-    if (!tasks.length) return "Add at least one activity to this management plan before running a simulation."
+    if (!tasks.length) return t("validation.addActivityBeforeSimulation")
 
     for (const task of tasks) {
       const data = task.data
       const supportedTaskType = activityTypeOptions.some((option) => option.id === task.type)
       if (!supportedTaskType) {
-        return `${task.name || "An activity"} uses an unsupported activity type.`
+        return t("validation.unsupportedActivityType", { name: task.name || t("common.activity") })
       }
 
       const timing =
         data?.timing === "constant" || (!task.start && !task.end) ? "constant" : "scheduled"
       if (timing === "scheduled" && (!task.start || !task.end)) {
-        return `${task.name || "An activity"} needs a start and end date, or should be marked constant.`
+        return t("validation.missingActivityDates", { name: task.name || t("common.activity") })
       }
 
       const targetScope = data?.targetScope
       if (targetScope !== "wholeTile" && targetScope !== "polygon") {
-        return `${task.name || "An activity"} is missing a target scope.`
+        return t("validation.missingTargetScope", { name: task.name || t("common.activity") })
       }
-      if (targetScope === "polygon" && !data?.area) {
-        return `${task.name || "An activity"} needs a polygon area before simulation.`
+      if (targetScope === "polygon" && !taskHasPolygonArea(data)) {
+        return t("validation.missingPolygonArea", { name: task.name || t("common.activity") })
       }
 
       if (task.type === "fishing") {
         const multipliers = data?.speciesEffortMultipliers
         if (!multipliers || typeof multipliers !== "object") {
-          return `${task.name || "Fishing activity"} needs per-species effort multipliers.`
+          return t("validation.missingSpeciesMultipliers", { name: task.name || t("common.activity") })
         }
         for (const species of marineSpecies) {
           const value = multipliers[species.id]
           if (value === undefined) continue
           if (typeof value !== "number" || !Number.isFinite(value) || value < 0) {
-            return `${task.name || "Fishing activity"} has an invalid ${species.label} effort multiplier.`
+            return t("validation.invalidSpeciesMultiplier", { name: task.name || t("common.activity"), species: species.label })
           }
         }
       }
@@ -458,14 +469,14 @@ export function TilePage() {
           (category) => category.id === construction?.category
         )
         if (!validCategory) {
-          return `${task.name || "Construction activity"} needs a construction category.`
+          return t("validation.missingConstructionCategory", { name: task.name || t("common.activity") })
         }
         if (
           typeof construction?.intensity !== "number" ||
           !Number.isFinite(construction.intensity) ||
           construction.intensity < 0
         ) {
-          return `${task.name || "Construction activity"} needs a non-negative intensity.`
+          return t("validation.invalidConstructionIntensity", { name: task.name || t("common.activity") })
         }
       }
     }
@@ -501,7 +512,7 @@ export function TilePage() {
       })
 
       if (!result) {
-        throw new Error("Simulation run did not return a result.")
+        throw new Error(t("simulations.runDidNotReturnResult"))
       }
     } catch (err) {
       setRunError(err instanceof Error ? err.message : String(err))
@@ -514,7 +525,7 @@ export function TilePage() {
     if (!tile) return
     const name = tileNameDraft.trim()
     if (!name) {
-      setTileSaveError("Enter a tile name before saving.")
+    setTileSaveError(t("tiles.enterTileName"))
       return
     }
 
@@ -591,7 +602,7 @@ export function TilePage() {
       return
     }
 
-    setResultsMessage("Run a simulation before opening results for this plan.")
+    setResultsMessage(t("simulations.runBeforeResults"))
   }
 
   function handleExportReport() {
@@ -602,26 +613,26 @@ export function TilePage() {
       return
     }
 
-    setResultsMessage("Run a completed simulation before exporting a report.")
+    setResultsMessage(t("simulations.runCompletedBeforeExport"))
   }
 
   const tileDetailRows = useMemo<DetailRow[]>(() => {
     if (!tile) return []
     return [
-      formatArea(tileAreaKm2(tile)) ? { label: "Area", value: formatArea(tileAreaKm2(tile))! } : null,
+      formatArea(tileAreaKm2(tile)) ? { label: t("common.area"), value: formatArea(tileAreaKm2(tile))! } : null,
       formatMetersPerPixel(tile.metersPerPixel)
-        ? { label: "Resolution", value: formatMetersPerPixel(tile.metersPerPixel)! }
+        ? { label: t("common.resolution"), value: formatMetersPerPixel(tile.metersPerPixel)! }
         : null,
       {
-        label: "Landcover",
-        value: formatAssetStatus(tile.landcoverStatus, Boolean(tile.landcover)) ?? "Not linked",
+        label: t("common.landcover"),
+        value: formatAssetStatus(tile.landcoverStatus, Boolean(tile.landcover)) ?? t("common.notLinked"),
       },
       {
-        label: "Ocean data",
-        value: formatAssetStatus(tile.oceanDataStatus, Boolean(tile.oceanData)) ?? "Not linked",
+        label: t("common.oceanData"),
+        value: formatAssetStatus(tile.oceanDataStatus, Boolean(tile.oceanData)) ?? t("common.notLinked"),
       },
-      { label: "Management plans", value: String(tileManagementPlans.length) },
-      { label: "Simulations", value: String(tileSimulations.length) },
+      { label: t("common.managementPlans"), value: String(tileManagementPlans.length) },
+      { label: t("common.simulations"), value: String(tileSimulations.length) },
       ...simulationResultRows(activeSimulationResult),
     ].filter((row): row is DetailRow => Boolean(row))
   }, [activeSimulationResult, tile, tileManagementPlans.length, tileSimulations.length])
@@ -688,33 +699,33 @@ export function TilePage() {
             <div className="flex-1 space-y-4">
               <div className="rounded-md border border-zinc-200 bg-white/60 p-4 shadow-sm">
                 <div className="text-[10px] font-bold text-zinc-400 uppercase tracking-wider">
-                  Simulation
+                  {t("common.simulation")}
                 </div>
                 <div className="mt-1 text-lg font-semibold text-zinc-900">
-                  {tile?.name || "Untitled tile"}
+                  {tile?.name || t("common.untitledTile")}
                 </div>
                 {activePlan ? (
                   <div className="mt-2 text-[11px] text-zinc-600">
-                    Management plan: <span className="font-medium text-zinc-900">{activePlan.name}</span>
+                    {t("common.managementPlan")}: <span className="font-medium text-zinc-900">{activePlan.name}</span>
                   </div>
                 ) : null}
                 <div className="mt-2 text-[10px] text-zinc-500 font-mono">{activeSimulationId}</div>
                 {managementPlanByIdLoading ? (
-                  <div className="mt-2 text-[11px] text-zinc-400 italic">Loading details...</div>
+                  <div className="mt-2 text-[11px] text-zinc-400 italic">{t("common.loadingDetails")}</div>
                 ) : null}
                 <button
                   type="button"
                   onClick={() => setSimulationDeleteOpen(true)}
                   className="mt-4 rounded-md border border-red-200 bg-red-50 px-3 py-1.5 text-xs font-medium text-red-700 transition-colors hover:bg-red-100"
                 >
-                  Delete simulation
+                  {t("simulations.deleteSimulation")}
                 </button>
               </div>
 
               {activeSimulationResult ? (
                 <>
                   <div className="rounded-md border border-zinc-200 bg-white/60 p-4 shadow-sm">
-                    <div className="text-xs font-semibold text-zinc-900">Display mode</div>
+                    <div className="text-xs font-semibold text-zinc-900">{t("tiles.displayMode")}</div>
                     <div className="mt-3 flex gap-2">
                       <button
                         type="button"
@@ -725,7 +736,7 @@ export function TilePage() {
                             : "bg-zinc-700 text-white hover:bg-zinc-600"
                         }`}
                       >
-                        Heatmap
+                        {t("tiles.heatmap")}
                       </button>
                       <button
                         type="button"
@@ -736,7 +747,7 @@ export function TilePage() {
                             : "bg-zinc-700 text-white hover:bg-zinc-600"
                         }`}
                       >
-                        3D hex map
+                        {t("tiles.hexMap")}
                       </button>
                     </div>
                   </div>
@@ -749,10 +760,10 @@ export function TilePage() {
                     >
                       <div>
                         <div className="text-xs font-semibold text-zinc-900">
-                          Species
+                          {t("common.species")}
                         </div>
                         <div className="mt-1 text-[11px] text-zinc-500">
-                          {selectedSpeciesCount} of {activeSimulationSpecies.length} visible
+                          {t("common.visibleCount", { selected: selectedSpeciesCount, total: activeSimulationSpecies.length })}
                         </div>
                       </div>
                       <HugeiconsIcon
@@ -806,14 +817,14 @@ export function TilePage() {
                             onClick={() => setSelectedSimulationSpecies(activeSimulationSpecies)}
                             className="cursor-pointer rounded-md bg-zinc-900 py-2 text-xs font-medium text-white hover:bg-zinc-800"
                           >
-                            Select all
+                            {t("common.selectAll")}
                           </button>
                           <button
                             type="button"
                             onClick={() => setSelectedSimulationSpecies([])}
                             className="cursor-pointer rounded-md bg-zinc-700 py-2 text-xs font-medium text-white hover:bg-zinc-600"
                           >
-                            None
+                            {t("common.none")}
                           </button>
                         </div>
                       </div>
@@ -824,7 +835,7 @@ export function TilePage() {
                     <div className="grid grid-cols-2 gap-2 text-[11px] text-zinc-700">
                       <div className="rounded-md bg-white/70 px-3 py-2 ring-1 ring-black/5">
                         <div className="text-[10px] font-bold uppercase tracking-wider text-zinc-400">
-                          Samples
+                          {t("metrics.samples")}
                         </div>
                         <div className="mt-1 font-semibold text-zinc-900">
                           {activeSimulationSummary.frameCount}
@@ -832,7 +843,7 @@ export function TilePage() {
                       </div>
                       <div className="rounded-md bg-white/70 px-3 py-2 ring-1 ring-black/5">
                         <div className="text-[10px] font-bold uppercase tracking-wider text-zinc-400">
-                          Grid
+                          {t("metrics.grid")}
                         </div>
                         <div className="mt-1 font-semibold text-zinc-900">
                           {activeSimulationSummary.width}x{activeSimulationSummary.height}
@@ -840,7 +851,7 @@ export function TilePage() {
                       </div>
                       <div className="rounded-md bg-white/70 px-3 py-2 ring-1 ring-black/5">
                         <div className="text-[10px] font-bold uppercase tracking-wider text-zinc-400">
-                          Species
+                          {t("common.species")}
                         </div>
                         <div className="mt-1 font-semibold text-zinc-900">
                           {activeSimulationSummary.speciesCount}
@@ -848,10 +859,10 @@ export function TilePage() {
                       </div>
                       <div className="rounded-md bg-white/70 px-3 py-2 ring-1 ring-black/5">
                         <div className="text-[10px] font-bold uppercase tracking-wider text-zinc-400">
-                          Sample Every
+                          {t("metrics.sampleEvery")}
                         </div>
                         <div className="mt-1 font-semibold text-zinc-900">
-                          {activeSimulationSummary.sampleEvery} steps
+                          {t("metrics.steps", { count: activeSimulationSummary.sampleEvery })}
                         </div>
                       </div>
                     </div>
@@ -865,7 +876,7 @@ export function TilePage() {
                 </>
               ) : (
                 <div className="rounded-md border border-zinc-200 bg-white/60 p-4 text-xs text-zinc-500 shadow-sm">
-                  Run simulation to see results.
+                  {t("simulations.runBeforeResults")}
                 </div>
               )}
             </div>
@@ -878,23 +889,23 @@ export function TilePage() {
                 className="text-xs font-medium text-zinc-500 hover:text-zinc-900 flex items-center gap-1 cursor-pointer"
               >
                 <HugeiconsIcon icon={ArrowDown01Icon} size={14} className="rotate-90" />
-                Back to map
+                {t("tiles.backToMap")}
               </button>
               {activeSimulationId || activePlanId ? (
                 <button
                   onClick={() => navigate(`/tile/${tileId}`)}
                   className="text-xs font-medium text-zinc-500 hover:text-zinc-900 cursor-pointer"
                 >
-                  Clear selection
+                  {t("tiles.clearSelection")}
                 </button>
               ) : null}
             </div>
 
             <TileDetails 
-              name={tile?.name || "Untitled tile"} 
+              name={tile?.name || t("common.untitledTile")} 
               status={tileStatus.label}
               statusTone={tileStatus.tone}
-              createdDate={tile?.created?.substring(0, 10) || "Unknown date"}
+              createdDate={tile?.created?.substring(0, 10) || t("common.unknownDate")}
               simulationInfoContent={<DetailRows rows={tileDetailRows} />}
               managementPlansContent={
                 <div className="space-y-3">
@@ -923,14 +934,14 @@ export function TilePage() {
                           >
                             <div className="min-w-0">
                               <div className="truncate text-xs font-semibold">
-                                {plan.name || "Untitled plan"}
+                                {plan.name || t("common.untitledPlan")}
                               </div>
                               <div
                                 className={`mt-1 text-[10px] ${
                                   isActive ? "text-white/70" : "text-zinc-500"
                                 }`}
                               >
-                                {taskCount} activit{taskCount === 1 ? "y" : "ies"}
+                                {tc("managementPlans.activityCount", "managementPlans.activityCountPlural", taskCount)}
                               </div>
                             </div>
                             <div
@@ -938,7 +949,7 @@ export function TilePage() {
                                 isActive ? "text-white/80" : "text-zinc-400"
                               }`}
                             >
-                              {isActive ? "Selected" : "Open"}
+                              {isActive ? t("common.selected") : t("common.open")}
                             </div>
                           </button>
                         )
@@ -946,7 +957,7 @@ export function TilePage() {
                     </div>
                   ) : (
                     <div className="rounded-md border border-dashed border-black/10 bg-white/60 px-3 py-3 text-xs text-zinc-600">
-                      No management plans found for this tile yet.
+                      {t("tiles.noManagementPlansForTile")}
                     </div>
                   )}
 
@@ -956,7 +967,7 @@ export function TilePage() {
                       onClick={() => navigate(`/tile/${tileId}`)}
                       className="w-full cursor-pointer rounded-md border border-black/10 bg-white/80 py-2 text-xs font-medium text-zinc-800 transition-colors hover:bg-white"
                     >
-                      Clear selected plan
+                      {t("tiles.clearSelectedPlan")}
                     </button>
                   ) : null}
 
@@ -965,7 +976,7 @@ export function TilePage() {
                     onClick={() => navigate(`/management-plans?tile=${tileId}`)}
                     className="w-full cursor-pointer rounded-md bg-zinc-800 py-2 text-xs font-medium text-white transition-colors hover:bg-zinc-700"
                   >
-                    Go to management plans
+                    {t("tiles.goToManagementPlans")}
                   </button>
                 </div>
               }
@@ -982,7 +993,7 @@ export function TilePage() {
                         selectedLandcover.texture ? (
                           <img
                             src={fileUrl(selectedLandcover, selectedLandcover.color_100 || selectedLandcover.color || selectedLandcover.texture_100 || selectedLandcover.texture) ?? ""}
-                            alt="Landcover"
+                            alt={t("common.landcover")}
                             className="h-full w-full object-cover"
                             style={{ imageRendering: "pixelated" }}
                             onMouseEnter={() => {
@@ -998,12 +1009,12 @@ export function TilePage() {
                             onMouseLeave={clearOverlay}
                           />
                         ) : (
-                          <div className="grid h-full place-items-center text-xs text-zinc-400">No image</div>
+                          <div className="grid h-full place-items-center text-xs text-zinc-400">{t("common.noImage")}</div>
                         )}
                       </div>
                       {coverageEntries && (
                         <div className="space-y-2">
-                          <div className="text-[10px] font-bold text-zinc-400 uppercase tracking-wider">Coverage</div>
+                          <div className="text-[10px] font-bold text-zinc-400 uppercase tracking-wider">{t("common.coverage")}</div>
                           <div className="space-y-1.5">
                             {coverageEntries.map((entry) => (
                               <div key={entry.key} className="flex items-center justify-between gap-2">
@@ -1018,7 +1029,7 @@ export function TilePage() {
                       )}
                     </div>
                   ) : (
-                    <div className="text-xs text-zinc-500 animate-pulse">Loading landcover...</div>
+                    <div className="text-xs text-zinc-500 animate-pulse">{t("common.loadingLandcover")}</div>
                   )}
                 </div>
               }
@@ -1052,7 +1063,7 @@ export function TilePage() {
                                   onMouseLeave={clearOverlay}
                                 />
                               ) : (
-                                <div className="grid h-full place-items-center text-[9px] text-zinc-400">FILE</div>
+                                <div className="grid h-full place-items-center text-[9px] text-zinc-400">{t("common.file")}</div>
                               )}
                             </div>
                           </div>
@@ -1060,7 +1071,7 @@ export function TilePage() {
                       })}
                     </div>
                   ) : (
-                    <div className="text-xs text-zinc-500 animate-pulse">Loading ocean data...</div>
+                    <div className="text-xs text-zinc-500 animate-pulse">{t("common.loadingOceanData")}</div>
                   )}
                 </div>
               }
@@ -1070,8 +1081,8 @@ export function TilePage() {
       </RightPane>
 
       {activeSimulationId && activeSimulationResult ? (
-        <BottomPane className="left-[calc(var(--spacing-pane)+20rem+var(--spacing-pane))] right-[calc(var(--spacing-pane)+min(42rem,calc(100vw-28rem))+var(--spacing-pane))]">
-          <div className="text-xs font-semibold text-zinc-900">Timeline</div>
+        <BottomPane className="left-[calc(var(--spacing-pane)+20rem+var(--spacing-pane))] right-[calc(var(--spacing-pane)+min(42rem,calc(100vw-28rem))+var(--spacing-pane))] z-50 overflow-visible">
+          <div className="text-xs font-semibold text-zinc-900">{t("common.timeline")}</div>
           <div className="mt-2">
             <SimulationTimeline
               steps={activeSimulationResult.steps}
@@ -1087,9 +1098,9 @@ export function TilePage() {
       {tileEditOpen ? (
         <div className="fixed inset-0 z-50 grid place-items-center bg-black/35 px-4 backdrop-blur-[1px]">
           <div className="w-full max-w-md rounded-xl border border-zinc-200 bg-white p-5 shadow-2xl">
-            <div className="text-lg font-semibold text-zinc-950">Edit tile</div>
+            <div className="text-lg font-semibold text-zinc-950">{t("tiles.editTile")}</div>
             <label className="mt-5 block text-xs font-semibold uppercase tracking-wider text-zinc-500">
-              Tile name
+              {t("tiles.tileName")}
             </label>
             <input
               value={tileNameDraft}
@@ -1110,7 +1121,7 @@ export function TilePage() {
                 onClick={() => setTileEditOpen(false)}
                 className="rounded-md border border-zinc-300 px-3 py-2 text-sm font-medium text-zinc-700 hover:bg-zinc-50"
               >
-                Cancel
+                {t("common.cancel")}
               </button>
               <button
                 type="button"
@@ -1118,7 +1129,7 @@ export function TilePage() {
                 onClick={() => void handleSaveTile()}
                 className="rounded-md bg-zinc-900 px-3 py-2 text-sm font-medium text-white hover:bg-zinc-800 disabled:opacity-60"
               >
-                {tileSavePending ? "Saving..." : "Save"}
+                {tileSavePending ? t("common.saving") : t("common.save")}
               </button>
             </div>
           </div>
@@ -1128,12 +1139,15 @@ export function TilePage() {
       {tileDeleteOpen ? (
         <div className="fixed inset-0 z-50 grid place-items-center bg-black/35 px-4 backdrop-blur-[1px]">
           <div className="w-full max-w-lg rounded-xl border border-zinc-200 bg-white p-5 shadow-2xl">
-            <div className="text-lg font-semibold text-zinc-950">Delete tile</div>
+            <div className="text-lg font-semibold text-zinc-950">{t("tiles.deleteTile")}</div>
             <div className="mt-3 text-sm leading-6 text-zinc-600">
-              This will delete {tile?.name || "this tile"} and cascade through{" "}
-              {tileManagementPlans.length} management plan
-              {tileManagementPlans.length === 1 ? "" : "s"} and {tileSimulations.length} simulation
-              {tileSimulations.length === 1 ? "" : "s"}.
+              {t("tiles.deleteTileCascade", {
+                tile: tile?.name || t("common.tile"),
+                plans: tileManagementPlans.length,
+                planSuffix: tileManagementPlans.length === 1 ? "" : "s",
+                simulations: tileSimulations.length,
+                simulationSuffix: tileSimulations.length === 1 ? "" : "s",
+              })}
             </div>
             {tileDeleteError ? (
               <div className="mt-3 rounded-md border border-red-200 bg-red-50 px-3 py-2 text-xs text-red-700">
@@ -1146,7 +1160,7 @@ export function TilePage() {
                 onClick={() => setTileDeleteOpen(false)}
                 className="rounded-md border border-zinc-300 px-3 py-2 text-sm font-medium text-zinc-700 hover:bg-zinc-50"
               >
-                Cancel
+                {t("common.cancel")}
               </button>
               <button
                 type="button"
@@ -1154,7 +1168,7 @@ export function TilePage() {
                 onClick={() => void handleDeleteTile()}
                 className="rounded-md bg-red-600 px-3 py-2 text-sm font-medium text-white hover:bg-red-500 disabled:opacity-60"
               >
-                {tileDeletePending ? "Deleting..." : "Delete tile"}
+                {tileDeletePending ? t("common.deleting") : t("tiles.deleteTile")}
               </button>
             </div>
           </div>
@@ -1164,10 +1178,9 @@ export function TilePage() {
       {simulationDeleteOpen ? (
         <div className="fixed inset-0 z-50 grid place-items-center bg-black/35 px-4 backdrop-blur-[1px]">
           <div className="w-full max-w-lg rounded-xl border border-zinc-200 bg-white p-5 shadow-2xl">
-            <div className="text-lg font-semibold text-zinc-950">Delete simulation</div>
+            <div className="text-lg font-semibold text-zinc-950">{t("simulations.deleteSimulation")}</div>
             <div className="mt-3 text-sm leading-6 text-zinc-600">
-              This will delete simulation {activeSimulationId} and any cached result files stored on
-              the record.
+              {t("simulations.deleteSimulationRecord", { id: activeSimulationId ?? "" })}
             </div>
             {simulationDeleteError ? (
               <div className="mt-3 rounded-md border border-red-200 bg-red-50 px-3 py-2 text-xs text-red-700">
@@ -1180,7 +1193,7 @@ export function TilePage() {
                 onClick={() => setSimulationDeleteOpen(false)}
                 className="rounded-md border border-zinc-300 px-3 py-2 text-sm font-medium text-zinc-700 hover:bg-zinc-50"
               >
-                Cancel
+                {t("common.cancel")}
               </button>
               <button
                 type="button"
@@ -1188,7 +1201,7 @@ export function TilePage() {
                 onClick={() => void handleDeleteActiveSimulation()}
                 className="rounded-md bg-red-600 px-3 py-2 text-sm font-medium text-white hover:bg-red-500 disabled:opacity-60"
               >
-                {simulationDeletePending ? "Deleting..." : "Delete simulation"}
+                {simulationDeletePending ? t("common.deleting") : t("simulations.deleteSimulation")}
               </button>
             </div>
           </div>

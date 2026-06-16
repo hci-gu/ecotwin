@@ -132,45 +132,38 @@ export async function fetchSimAgents() {
   return pb.send<SimAgentsResponse>("/simulate/agents", { method: "GET" })
 }
 
-export async function fetchSimById(id: string) {
-  return pb.send<SimByIdResponse>(`/simulate/${id}`, { method: "GET" })
-}
-
-export async function fetchSimulationResult(
-  simulationId: string,
-  options?: {
-    worldSize?: number
-    world_size?: number
-    maxSteps?: number
-    max_steps?: number
-    sampleEvery?: number
-    sample_every?: number
-    tickDurationDays?: number
-    tick_duration_days?: number
-    startDate?: string
-    start_date?: string
-    endDate?: string
-    end_date?: string
-    includeFinal?: boolean
-    include_final?: boolean
-    modelPath?: string
-    model_path?: string
-    agentSet?: string
-    agent_set?: string
-    agent?: string
-    agents?: string
-    format?: "base64" | "npz"
-  }
-) {
-  return pb.send<SimByIdResponse>(`/simulate/${simulationId}`, {
-    method: "GET",
-    query: options,
-  })
+export type SimulationRunOptions = {
+  worldSize?: number
+  world_size?: number
+  maxSteps?: number
+  max_steps?: number
+  sampleEvery?: number
+  sample_every?: number
+  tickDurationDays?: number
+  tick_duration_days?: number
+  startDate?: string
+  start_date?: string
+  endDate?: string
+  end_date?: string
+  includeFinal?: boolean
+  include_final?: boolean
+  runs?: number
+  runCount?: number
+  run_count?: number
+  modelId?: string
+  model?: string
+  modelPath?: string
+  model_path?: string
+  agentSet?: string
+  agent_set?: string
+  agent?: string
+  agents?: string
+  format?: "base64" | "npz"
 }
 
 export async function runSimulationByRecordId(
   simulationRecordId: string,
-  options?: Parameters<typeof fetchSimulationResult>[1]
+  options?: SimulationRunOptions
 ) {
   return pb.send<SimByIdResponse>(`/simulation/${simulationRecordId}/run`, {
     method: "GET",

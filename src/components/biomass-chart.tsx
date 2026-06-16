@@ -1,11 +1,16 @@
 import { useMemo, useState } from "react"
+import { useAtomValue } from "jotai"
 
 import { getSpeciesLabel } from "@/config/ecotwin-domain"
 import { formatSimulationDateForStep } from "@/lib/simulation-dates"
+import { speciesIndexOf } from "@/lib/species-matching"
+import { getSpeciesColor } from "@/lib/species-colors"
+import { t } from "@/lib/translations"
 import type {
   SimulationBiomassSummary,
   SimulationResultBase64,
 } from "@/state/ecotwin-types"
+import { simulationStepAtom } from "@/state/simulation-ui-state"
 
 type BiomassChartProps = {
   result: SimulationResultBase64
@@ -38,28 +43,6 @@ type ComputedChart = {
   subtitle: string
   valueFormat: "absolute" | "relative"
 }
-
-const defaultColors = [
-  "#0f172a", // slate-900
-  "#2563eb", // blue-600
-  "#16a34a", // green-600
-  "#f59e0b", // amber-500
-  "#ef4444", // red-500
-  "#a855f7", // purple-500
-  "#14b8a6", // teal-500
-  "#f97316", // orange-500
-]
-
-const summaryColors = [
-  "#67a976", // phytoplankton
-  "#d8c66d", // zooplankton
-  "#9f6db5", // pelagic fish
-  "#4aa3f0", // codfish
-  "#8586dd", // porpoises
-  "#7b78c9", // seabirds
-  "#14b8a6",
-  "#f97316",
-]
 
 function isFiniteNumberArray(value: unknown, length: number) {
   return (
@@ -124,7 +107,7 @@ function computeSummaryChart(
   const indices = selectedSummaryIndices(summary, selectedSpecies)
   const series = indices.map((groupIndex) => ({
     name: groups[groupIndex] ?? `Group ${groupIndex + 1}`,
-    color: summaryColors[groupIndex % summaryColors.length],
+    color: getSpeciesColor(groups[groupIndex], groupIndex).hex,
     values: summary.mean[groupIndex] ?? [],
     lowValues: summary.ci_low[groupIndex],
     highValues: summary.ci_high[groupIndex],
@@ -137,7 +120,7 @@ function computeSummaryChart(
       series,
       yMin: 0,
       yMax: 1,
-      subtitle: "No selected groups",
+      subtitle: t("chart.noSelectedGroups"),
       valueFormat:
         summary.normalization === "relative_to_initial" ? "relative" : "absolute",
     }
@@ -169,7 +152,7 @@ function computeSummaryChart(
     typeof summary.confidence_level === "number" &&
     Number.isFinite(summary.confidence_level)
       ? `${Math.round(summary.confidence_level * 100)}% CI`
-      : "CI"
+      : t("chart.confidenceInterval")
 
   return {
     mode: "summary",
@@ -177,7 +160,7 @@ function computeSummaryChart(
     series,
     yMin,
     yMax,
-    subtitle: `${summary.run_count} runs / ${confidence}`,
+    subtitle: t("chart.runsConfidence", { runs: summary.run_count, confidence }),
     valueFormat:
       summary.normalization === "relative_to_initial" ? "relative" : "absolute",
   }
@@ -209,7 +192,7 @@ function computeTensorChart(
     selectedSpecies === null || selectedSpecies === undefined
       ? Array.from({ length: s }, (_, i) => i)
       : selectedSpecies
-          .map((name) => speciesLabels.indexOf(name))
+          .map((name) => speciesIndexOf(speciesLabels, name))
           .filter((index) => index >= 0)
   const selectedIndexSet = new Set(selectedIndices)
 
@@ -234,7 +217,7 @@ function computeTensorChart(
 
   const series: Series[] = [
     {
-      name: "Total",
+      name: t("chart.total"),
       color: "#0f172a",
       values: Array.from(totals, (v) => Number(v)),
     },
@@ -244,7 +227,7 @@ function computeTensorChart(
     for (const sp of selectedIndices) {
       series.push({
         name: getSpeciesLabel(speciesLabels[sp] ?? `Species ${sp + 1}`),
-        color: defaultColors[(sp + 1) % defaultColors.length],
+        color: getSpeciesColor(speciesLabels[sp], sp).hex,
         values: Array.from(perSpecies[sp], (v) => Number(v)),
       })
     }
@@ -268,7 +251,7 @@ function computeTensorChart(
     series,
     yMin,
     yMax,
-    subtitle: "sum over grid (H x W), per sample",
+    subtitle: t("chart.sumOverGrid"),
     valueFormat: "absolute",
   }
 }
@@ -322,6 +305,8 @@ export function BiomassChart({
   selectedSpecies,
 }: BiomassChartProps) {
   const [showUncertainty, setShowUncertainty] = useState(true)
+  const [hoverFrame, setHoverFrame] = useState<number | null>(null)
+  const playbackFrame = useAtomValue(simulationStepAtom)
   const computed = useMemo(() => {
     return (
       computeSummaryChart(result.biomass_summary, selectedSpecies) ??
@@ -332,16 +317,16 @@ export function BiomassChart({
   if (!computed) {
     return (
       <div className="rounded-md bg-white/70 px-3 py-2 text-[11px] text-zinc-700 ring-1 ring-black/5">
-        Biomass chart unavailable (invalid or incomplete simulation data).
+        {t("chart.unavailable")}
       </div>
     )
   }
 
   const width = 640
-  const padL = 44
-  const padR = 14
+  const padL = 34
+  const padR = 12
   const padT = 12
-  const padB = 26
+  const padB = 32
   const innerW = width - padL - padR
   const innerH = height - padT - padB
 
@@ -352,6 +337,19 @@ export function BiomassChart({
   const xFor = (x: number) => padL + ((x - xMin) / xSpan) * innerW
   const yFor = (y: number) =>
     padT + ((computed.yMax - y) / (computed.yMax - computed.yMin)) * innerH
+  const frameForSvgX = (svgX: number) => {
+    const step = xMin + ((svgX - padL) / innerW) * xSpan
+    let bestIndex = 0
+    let bestDistance = Infinity
+    for (let index = 0; index < computed.steps.length; index += 1) {
+      const distance = Math.abs((computed.steps[index] ?? index) - step)
+      if (distance < bestDistance) {
+        bestDistance = distance
+        bestIndex = index
+      }
+    }
+    return bestIndex
+  }
 
   const yTicks = 4
   const xTicks = 4
@@ -374,7 +372,7 @@ export function BiomassChart({
   const subtitle =
     computed.mode === "tensor" &&
     formatSimulationDateForStep(xMin, result.start_date, result.tick_duration_days)
-      ? "sum over grid (H x W), per sample date"
+      ? t("chart.sumOverGridDate")
       : computed.subtitle
 
   const fmt = (v: number) => {
@@ -386,15 +384,32 @@ export function BiomassChart({
   }
 
   const showBands = computed.mode === "summary" && showUncertainty
+  const currentFrame = Math.max(
+    0,
+    Math.min(Math.floor(playbackFrame), computed.steps.length - 1)
+  )
+  const activeFrame = hoverFrame ?? currentFrame
+  const activeStep = computed.steps[activeFrame] ?? xMin
+  const activeX = xFor(activeStep)
+  const activeDateLabel =
+    formatSimulationDateForStep(activeStep, result.start_date, result.tick_duration_days) ??
+    String(Math.round(activeStep))
+  const tooltipX = activeX > width - 160 ? activeX - 154 : activeX + 8
+  const tooltipY = padT + 8
+  const tooltipRows = computed.series.slice(0, 8).map((line) => ({
+    name: line.name,
+    color: line.color,
+    value: line.values[activeFrame] ?? Number.NaN,
+  }))
 
   return (
-    <div className="rounded-md bg-white/70 p-3 ring-1 ring-black/5">
+    <div>
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div>
           <div className="text-xs font-semibold text-zinc-900">
             {computed.mode === "summary"
-              ? "Time series - Relative biomass"
-              : "Biomass over time"}
+              ? t("chart.timeSeriesRelativeBiomass")
+              : t("chart.biomassOverTime")}
           </div>
           <div className="mt-0.5 text-[11px] text-zinc-600">
             {subtitle}
@@ -409,7 +424,7 @@ export function BiomassChart({
               onChange={(event) => setShowUncertainty(event.target.checked)}
               className="size-3 accent-blue-500"
             />
-            Show uncertainty
+            {t("chart.showUncertainty")}
           </label>
         ) : null}
       </div>
@@ -419,7 +434,13 @@ export function BiomassChart({
           viewBox={`0 0 ${width} ${height}`}
           className="h-auto w-full"
           role="img"
-          aria-label="Biomass over time chart"
+          aria-label={t("chart.biomassOverTimeChart")}
+          onMouseMove={(event) => {
+            const rect = event.currentTarget.getBoundingClientRect()
+            const svgX = ((event.clientX - rect.left) / rect.width) * width
+            setHoverFrame(frameForSvgX(Math.max(padL, Math.min(padL + innerW, svgX))))
+          }}
+          onMouseLeave={() => setHoverFrame(null)}
         >
           <line
             x1={padL}
@@ -478,7 +499,9 @@ export function BiomassChart({
                 <text
                   x={x}
                   y={padT + innerH + 18}
-                  textAnchor="middle"
+                  textAnchor={
+                    i === 0 ? "start" : i === xTickValues.length - 1 ? "end" : "middle"
+                  }
                   fontSize="10"
                   fill="rgba(0,0,0,0.55)"
                 >
@@ -518,11 +541,85 @@ export function BiomassChart({
                 d={d}
                 fill="none"
                 stroke={line.color}
-                strokeWidth={line.name === "Total" ? 2 : 1.8}
-                opacity={line.name === "Total" ? 0.95 : 0.9}
+                strokeWidth={line.name === t("chart.total") ? 2 : 1.8}
+                opacity={line.name === t("chart.total") ? 0.95 : 0.9}
               />
             )
           })}
+
+          <line
+            x1={xFor(computed.steps[currentFrame] ?? xMin)}
+            y1={padT}
+            x2={xFor(computed.steps[currentFrame] ?? xMin)}
+            y2={padT + innerH}
+            stroke="rgba(24,24,27,0.72)"
+            strokeWidth={1.25}
+            strokeDasharray="4 3"
+          />
+
+          <rect
+            x={padL}
+            y={padT}
+            width={innerW}
+            height={innerH}
+            fill="transparent"
+          />
+
+          {hoverFrame !== null ? (
+            <g>
+              <line
+                x1={activeX}
+                y1={padT}
+                x2={activeX}
+                y2={padT + innerH}
+                stroke="rgba(63,90,80,0.72)"
+                strokeWidth={1}
+              />
+              {tooltipRows.map((row) => {
+                const value = row.value
+                if (!Number.isFinite(value)) return null
+                return (
+                  <circle
+                    key={`${row.name}-hover-point`}
+                    cx={activeX}
+                    cy={yFor(value)}
+                    r={3}
+                    fill="white"
+                    stroke={row.color}
+                    strokeWidth={1.5}
+                  />
+                )
+              })}
+              <rect
+                x={tooltipX}
+                y={tooltipY}
+                width={146}
+                height={24 + tooltipRows.length * 15}
+                rx={4}
+                fill="rgba(24,24,27,0.94)"
+              />
+              <text
+                x={tooltipX + 8}
+                y={tooltipY + 15}
+                fontSize="10"
+                fontWeight={700}
+                fill="white"
+              >
+                {activeDateLabel}
+              </text>
+              {tooltipRows.map((row, index) => (
+                <g key={`${row.name}-tooltip`} transform={`translate(${tooltipX + 8} ${tooltipY + 31 + index * 15})`}>
+                  <circle cx={3} cy={-3} r={3} fill={row.color} />
+                  <text x={10} y={0} fontSize="9" fill="rgba(255,255,255,0.86)">
+                    {row.name}
+                  </text>
+                  <text x={130} y={0} textAnchor="end" fontSize="9" fill="white">
+                    {fmt(row.value)}
+                  </text>
+                </g>
+              ))}
+            </g>
+          ) : null}
         </svg>
       </div>
 
@@ -540,7 +637,7 @@ export function BiomassChart({
         </div>
       ) : (
         <div className="mt-2 text-[11px] text-zinc-500">
-          No selected chart series.
+          {t("chart.noSelectedSeries")}
         </div>
       )}
     </div>

@@ -4,10 +4,12 @@ import { Outlet } from "react-router-dom"
 
 import { MapViewport } from "@/components/map-viewport"
 import { TopNav } from "@/components/top-nav"
+import { useLocale } from "@/lib/translations"
 import { refreshEcotwinStateAtom } from "@/state/ecotwin-atoms"
 
 export function AppLayout() {
   const refreshAppState = useSetAtom(refreshEcotwinStateAtom)
+  const locale = useLocale()
 
   useEffect(() => {
     void refreshAppState()
@@ -15,9 +17,9 @@ export function AppLayout() {
 
   return (
     <div className="relative h-screen w-full overflow-hidden bg-zinc-950">
-      <MapViewport />
+      <MapViewport key={`map-${locale}`} />
       <TopNav />
-      <Outlet />
+      <Outlet key={`page-${locale}`} />
     </div>
   )
 }

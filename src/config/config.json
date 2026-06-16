@@ -1,0 +1,63 @@
+{
+  "tileId": "kizt8fh4h5s4prz",
+  "managementPlanId": "n3pjykc47iu38iw",
+  "scenario": "Mareld",
+  "simulation": {
+    "lengthYears": 3,
+    "runs": 5
+  },
+  "impactControls": [
+    {
+      "id": "trawling",
+      "label": "Trawling impact",
+      "value": 1
+    },
+    {
+      "id": "noise",
+      "label": "Noise impact",
+      "value": 1
+    },
+    {
+      "id": "rotor",
+      "label": "Rotor impact",
+      "value": 1
+    }
+  ],
+  "mapLayers": [
+    "Phytoplankton",
+    "Zooplankton",
+    "Pelagic fish",
+    "Codfish",
+    "Porpoises",
+    "Seabirds",
+    "Wind farm",
+    "Fairway",
+    "Project area"
+  ],
+  "startingValues": [
+    {
+      "label": "Total biomass",
+      "value": "115 000 tons"
+    },
+    {
+      "label": "Phytoplankton",
+      "value": "80 000 tons"
+    },
+    {
+      "label": "Zooplankton",
+      "value": "30 000 tons"
+    },
+    {
+      "label": "Fish (pelagic)",
+      "value": "3 000 tons"
+    },
+    {
+      "label": "Porpoises",
+      "value": "1 000 tons"
+    },
+    {
+      "label": "Seabirds",
+      "value": "20 tons"
+    }
+  ]
+}

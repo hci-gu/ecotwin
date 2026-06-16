@@ -1,4 +1,5 @@
 import type { Tile } from "@/state/ecotwin-types"
+import { t } from "@/lib/translations"
 
 export type TileStatusTone = "success" | "warning" | "danger" | "neutral"
 
@@ -13,51 +14,51 @@ export function hasActiveTileGeneration(tile?: Tile | null) {
 
 export function tilePrimaryStatus(tile?: Tile | null, simulationRunning = false) {
   if (!tile) {
-    return { label: "Loading tile...", tone: "neutral" as TileStatusTone }
+    return { label: t("assets.loadingTile"), tone: "neutral" as TileStatusTone }
   }
 
   if (simulationRunning) {
-    return { label: "Running...", tone: "warning" as TileStatusTone }
+    return { label: t("assets.running"), tone: "warning" as TileStatusTone }
   }
 
   if (tile.landcoverStatus === "failed" || tile.oceanDataStatus === "failed") {
-    return { label: "Generation failed", tone: "danger" as TileStatusTone }
+    return { label: t("assets.generationFailed"), tone: "danger" as TileStatusTone }
   }
 
   if (isPending(tile.landcoverStatus)) {
-    return { label: "Generating landcover...", tone: "warning" as TileStatusTone }
+    return { label: t("assets.generatingLandcover"), tone: "warning" as TileStatusTone }
   }
 
   if (isPending(tile.oceanDataStatus)) {
-    return { label: "Generating ocean data...", tone: "warning" as TileStatusTone }
+    return { label: t("assets.generatingOceanData"), tone: "warning" as TileStatusTone }
   }
 
   if (tile.oceanDataStatus === "skipped") {
-    return { label: "Ocean data skipped", tone: "neutral" as TileStatusTone }
+    return { label: t("assets.oceanDataSkipped"), tone: "neutral" as TileStatusTone }
   }
 
   if (!tile.landcover) {
-    return { label: "Missing landcover", tone: "neutral" as TileStatusTone }
+    return { label: t("assets.missingLandcover"), tone: "neutral" as TileStatusTone }
   }
 
   if (!tile.oceanData) {
-    return { label: "Missing ocean data", tone: "neutral" as TileStatusTone }
+    return { label: t("assets.missingOceanData"), tone: "neutral" as TileStatusTone }
   }
 
-  return { label: "Ready to run", tone: "success" as TileStatusTone }
+  return { label: t("assets.readyToRun"), tone: "success" as TileStatusTone }
 }
 
 export function landcoverStatusMessage(tile?: Tile | null) {
-  if (!tile) return "No landcover linked"
-  if (tile.landcoverStatus === "failed") return "Generation failed"
-  if (isPending(tile.landcoverStatus)) return "Generating landcover..."
-  return "No landcover linked"
+  if (!tile) return t("assets.noLandcoverLinked")
+  if (tile.landcoverStatus === "failed") return t("assets.generationFailed")
+  if (isPending(tile.landcoverStatus)) return t("assets.generatingLandcover")
+  return t("assets.noLandcoverLinked")
 }
 
 export function oceanDataStatusMessage(tile?: Tile | null) {
-  if (!tile) return "No ocean data linked"
-  if (tile.oceanDataStatus === "failed") return "Generation failed"
-  if (tile.oceanDataStatus === "skipped") return "Ocean data skipped"
-  if (isPending(tile.oceanDataStatus)) return "Generating ocean data..."
-  return "No ocean data linked"
+  if (!tile) return t("assets.noOceanDataLinked")
+  if (tile.oceanDataStatus === "failed") return t("assets.generationFailed")
+  if (tile.oceanDataStatus === "skipped") return t("assets.oceanDataSkipped")
+  if (isPending(tile.oceanDataStatus)) return t("assets.generatingOceanData")
+  return t("assets.noOceanDataLinked")
 }

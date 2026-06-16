@@ -2,6 +2,7 @@ import {
   formatSimulationDateRangeForSteps,
   normalizedTickDurationDays,
 } from "@/lib/simulation-dates"
+import { t } from "@/lib/translations"
 import type { SimulationResultBase64, Tile } from "@/state/ecotwin-types"
 
 const EARTH_RADIUS_METERS = 6378137
@@ -108,38 +109,36 @@ export function simulationResultRows(result?: SimulationResultBase64 | null): De
 
   return [
     Number.isFinite(width) && Number.isFinite(height)
-      ? { label: "Grid", value: `${width}x${height}` }
+      ? { label: t("metrics.grid"), value: `${width}x${height}` }
       : null,
-    Number.isFinite(frames) ? { label: "Samples", value: String(frames) } : null,
-    Number.isFinite(species) ? { label: "Species", value: String(species) } : null,
+    Number.isFinite(frames) ? { label: t("metrics.samples"), value: String(frames) } : null,
+    Number.isFinite(species) ? { label: t("common.species"), value: String(species) } : null,
     Number.isFinite(result.sample_every)
-      ? { label: "Sample interval", value: `${result.sample_every} steps` }
+      ? { label: t("metrics.sampleInterval"), value: t("metrics.steps", { count: result.sample_every }) }
       : null,
     simulationDurationDays
       ? {
-          label: "Simulation length",
-          value: `${formatNumber(
-            simulationDurationDays,
-            simulationDurationDays >= 10 ? 0 : 1
-          )} days`,
+          label: t("metrics.simulationLength"),
+          value: t("metrics.days", {
+            count: formatNumber(simulationDurationDays, simulationDurationDays >= 10 ? 0 : 1),
+          }),
         }
       : null,
     Number.isFinite(result.tick_duration_days)
       ? {
-          label: "Time scale",
+          label: t("metrics.timeScale"),
           value:
             tickDurationDays === 1
-              ? "Daily"
-              : `${formatNumber(
-                  tickDurationDays,
-                  tickDurationDays >= 10 ? 0 : 1
-                )}-day increments`,
+              ? t("metrics.daily")
+              : t("metrics.dayIncrements", {
+                  count: formatNumber(tickDurationDays, tickDurationDays >= 10 ? 0 : 1),
+                }),
         }
       : null,
     dateRange
-      ? { label: "Date range", value: dateRange }
+      ? { label: t("metrics.dateRange"), value: dateRange }
       : hasSampleRange
-        ? { label: "Sample range", value: `${firstStep}-${lastStep}` }
+        ? { label: t("metrics.sampleRange"), value: `${firstStep}-${lastStep}` }
         : null,
   ].filter((row): row is DetailRow => Boolean(row))
 }

@@ -5,6 +5,7 @@ import { simulationsAtom, managementPlansAtom } from "@/state/ecotwin-atoms"
 import { useMemo } from "react"
 import { HugeiconsIcon } from "@hugeicons/react"
 import { PlayIcon } from "@hugeicons/core-free-icons"
+import { t } from "@/lib/translations"
 
 type SimulationListProps = {
   className?: string
@@ -61,9 +62,9 @@ export function SimulationList({ className }: SimulationListProps) {
       <div className="shrink-0 border-b border-black/5 bg-white/40 px-4 py-3 backdrop-blur-sm">
         <div className="flex items-start justify-between gap-3">
           <div className="min-w-0">
-            <h2 className="text-sm font-semibold text-zinc-950">Simulations</h2>
+            <h2 className="text-sm font-semibold text-zinc-950">{t("common.simulations")}</h2>
             <div className="mt-0.5 truncate text-[11px] text-zinc-500">
-              {activePlan?.name || "No plan selected"}
+              {activePlan?.name || t("simulations.noPlanSelected")}
             </div>
           </div>
           <span className="shrink-0 text-[11px] font-medium text-zinc-500">
@@ -79,7 +80,7 @@ export function SimulationList({ className }: SimulationListProps) {
           </div>
           {!filteredSimulations.length && (
             <div className="py-4 text-xs italic text-zinc-500">
-              {activePlanId ? "No simulations found for this plan." : "No plan selected."}
+              {activePlanId ? t("simulations.noSimulationsForPlan") : t("simulations.noPlanSelected")}
             </div>
           )}
           {filteredSimulations.map((sim) => {
@@ -116,7 +117,7 @@ export function SimulationList({ className }: SimulationListProps) {
                       "text-[10px]",
                       isActive ? "text-white/60" : "text-zinc-500"
                     )}>
-                      {sim.created?.substring(0, 10) || "Unknown date"}
+                      {sim.created?.substring(0, 10) || t("common.unknownDate")}
                     </div>
                   </div>
                 </div>

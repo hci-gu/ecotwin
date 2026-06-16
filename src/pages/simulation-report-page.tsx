@@ -50,6 +50,7 @@ import type {
 import { useAtomValue, useSetAtom } from "jotai"
 import { useEffect, useMemo, useState } from "react"
 import { useNavigate, useParams } from "react-router-dom"
+import { t } from "@/lib/translations"
 
 function taskData(task?: Task): TaskData | undefined {
   const value = task?.data
@@ -58,11 +59,11 @@ function taskData(task?: Task): TaskData | undefined {
 }
 
 function formatDate(value?: string) {
-  return value?.substring(0, 10) || "Unknown date"
+  return value?.substring(0, 10) || t("common.unknownDate")
 }
 
 function simulationStatus(simulation?: Simulation | null) {
-  if (!simulation) return "Unknown"
+  if (!simulation) return t("common.unknown")
   if (simulation.status) return simulation.status
   if (simulation.resultJson || simulation.resultNpz) return "completed"
   return "pending"
@@ -70,22 +71,22 @@ function simulationStatus(simulation?: Simulation | null) {
 
 function taskTiming(task: Task) {
   const timing = taskData(task)?.timing
-  if (timing === "constant") return "Constant"
+  if (timing === "constant") return t("common.constant")
   if (timing === "scheduled") return `${formatDate(task.start)} to ${formatDate(task.end)}`
-  return task.start || task.end ? `${formatDate(task.start)} to ${formatDate(task.end)}` : "Constant"
+  return task.start || task.end ? `${formatDate(task.start)} to ${formatDate(task.end)}` : t("common.constant")
 }
 
 function activitySummary(task: Task) {
   const data = taskData(task)
   const lines = [
-    `${task.name || "Untitled activity"} (${getActivityTypeLabel(task.type)})`,
-    `Timing: ${taskTiming(task)}`,
-    data?.targetScope ? `Target scope: ${data.targetScope}` : null,
+    t("report.activityNameWithType", { name: task.name || t("common.untitledActivity"), type: getActivityTypeLabel(task.type) }),
+    t("managementPlans.timingPrefix", { timing: taskTiming(task) }),
+    data?.targetScope ? `${t("managementPlans.targetScope")}: ${data.targetScope}` : null,
     data?.areaSummary?.areaKm2
-      ? `Area: ${formatArea(data.areaSummary.areaKm2)}`
+      ? `${t("common.area")}: ${formatArea(data.areaSummary.areaKm2)}`
       : null,
-    data?.objective ? `Objective: ${data.objective}` : null,
-    data?.description ? `Description: ${data.description}` : null,
+    data?.objective ? `${t("managementPlans.targetObjective")}: ${data.objective}` : null,
+    data?.description ? `${t("common.details")}: ${data.description}` : null,
   ].filter((value): value is string => Boolean(value))
 
   if (task.type === "fishing" && data?.speciesEffortMultipliers) {
@@ -229,12 +230,12 @@ function ManagementPlanTimeline({
   const timelineRows = useMemo(() => {
     if (!range) {
       return {
-        rangeLabel: "No dated activities",
+        rangeLabel: t("report.noDatedActivities"),
         rows: tasks.map((task, index) => ({
           task,
           left: tasks.length ? (index / tasks.length) * 100 : 0,
           width: tasks.length ? 100 / tasks.length : 100,
-          dateLabel: isConstantTask(task) ? "Constant" : "Unscheduled",
+          dateLabel: isConstantTask(task) ? t("common.constant") : t("common.unscheduled"),
           accent: activityAccent(task.type),
         })),
       }
@@ -267,7 +268,7 @@ function ManagementPlanTimeline({
                 range.startDate,
                 range.tickDurationDays
               ) ?? `${formatPlanDate(task.start)} to ${formatPlanDate(task.end)}`
-            : "Unscheduled",
+            : t("common.unscheduled"),
           accent: activityAccent(task.type),
         }
       }),
@@ -277,7 +278,7 @@ function ManagementPlanTimeline({
   return (
     <div className="rounded-md bg-white/70 p-3 ring-1 ring-black/5">
       <div className="flex flex-wrap items-baseline justify-between gap-3">
-        <div className="text-xs font-semibold text-zinc-900">Management plan timeline</div>
+        <div className="text-xs font-semibold text-zinc-900">{t("report.managementPlanTimeline")}</div>
         <div className="text-[11px] text-zinc-600">{timelineRows.rangeLabel}</div>
       </div>
 
@@ -286,7 +287,7 @@ function ManagementPlanTimeline({
           timelineRows.rows.map(({ task, left, width, dateLabel, accent }) => (
             <div key={task.id} className="grid gap-2 sm:grid-cols-[10rem_1fr]">
               <div className="min-w-0">
-                <div className="truncate text-xs font-medium text-zinc-900">{task.name || "Untitled activity"}</div>
+                <div className="truncate text-xs font-medium text-zinc-900">{task.name || t("common.untitledActivity")}</div>
                 <div className="mt-1 text-[11px] text-zinc-500">
                   {taskTypeLabel(task.type)} · {taskTiming(task)}
                 </div>
@@ -313,7 +314,7 @@ function ManagementPlanTimeline({
           ))
         ) : (
           <div className="rounded-md border border-dashed border-zinc-300 px-3 py-4 text-sm text-zinc-500">
-            No activities available for this report.
+            {t("report.noActivities")}
           </div>
         )}
       </div>
@@ -361,7 +362,7 @@ export function SimulationReportPage() {
     void fetchSimulationResultByRecordId({
       simulationRecordId: simulationId,
       cachedOnly: true,
-    })
+    }).catch(() => {})
   }, [
     fetchSimulationResultByRecordId,
     result,
@@ -392,7 +393,7 @@ export function SimulationReportPage() {
 
   function handleExportPdf() {
     if (!simulation || !result) {
-      setExportError("Load a completed simulation result before exporting.")
+      setExportError(t("report.loadCompletedBeforeExport"))
       return
     }
     setExporting(true)
@@ -422,11 +423,11 @@ export function SimulationReportPage() {
               className="report-print-hidden inline-flex items-center gap-1.5 text-sm font-medium text-zinc-500 hover:text-zinc-950"
             >
               <HugeiconsIcon icon={ArrowLeft01Icon} size={16} />
-              Back to results
+              {t("report.backToResults")}
             </button>
-            <h1 className="mt-4 text-3xl font-medium text-zinc-950">Simulation report</h1>
+            <h1 className="mt-4 text-3xl font-medium text-zinc-950">{t("report.title")}</h1>
             <p className="mt-2 text-sm text-zinc-500">
-              {tile?.name || "Unknown tile"} · {plan?.name || "Unknown plan"}
+              {tile?.name || t("common.unknownTile")} · {plan?.name || t("common.unknownPlan")}
             </p>
           </div>
           <Button
@@ -435,13 +436,13 @@ export function SimulationReportPage() {
             onClick={handleExportPdf}
             className="report-print-hidden rounded-lg bg-zinc-900 px-4 text-white hover:bg-zinc-800"
           >
-            {exporting ? "Exporting..." : "Export PDF"}
+            {exporting ? t("common.exporting") : t("common.exportPdf")}
           </Button>
         </div>
 
         {simulationResultError ? (
           <div className="mt-6 rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
-            Failed to load result: {simulationResultError.message}
+            {t("report.failedToLoadResult", { message: simulationResultError.message })}
           </div>
         ) : null}
 
@@ -454,14 +455,14 @@ export function SimulationReportPage() {
         <div className="report-no-break mt-10 grid gap-8 border-y border-zinc-200 py-6 lg:grid-cols-[16rem_1fr]">
           <div>
             <h2 className="text-sm font-semibold uppercase tracking-[0.18em] text-zinc-500">
-              Contents
+              {t("report.contents")}
             </h2>
             <div className="mt-4 space-y-2 text-sm">
               {[
-                ["01", "Simulation overview"],
-                ["02", "Management plan"],
-                ["03", "Results"],
-                ["04", "Biomass and timeline"],
+                ["01", t("report.overview")],
+                ["02", t("report.managementPlan")],
+                ["03", t("report.results")],
+                ["04", t("report.biomassAndTimeline")],
               ].map(([number, label]) => (
                 <div key={number} className="flex items-baseline gap-3">
                   <span className="w-7 text-xs font-semibold text-zinc-400">{number}</span>
@@ -473,32 +474,27 @@ export function SimulationReportPage() {
           </div>
 
           <div>
-            <h2 className="text-lg font-semibold text-zinc-950">Executive summary</h2>
+            <h2 className="text-lg font-semibold text-zinc-950">{t("report.executiveSummary")}</h2>
             <div className="mt-3 space-y-3 text-sm leading-6 text-zinc-600">
               <p>
-                This draft report summarises the selected management plan, the aligned
-                simulation period, and the projected biomass response for the selected
-                tile. The narrative text here is placeholder copy for the final
-                assessment and can be replaced once the review language is agreed.
+                {t("report.summaryParagraph1")}
               </p>
               <p>
-                The current layout is intended to read as an export-ready report:
-                overview details first, followed by the planned interventions, model
-                outputs, and the management timeline used to align the simulation.
+                {t("report.summaryParagraph2")}
               </p>
             </div>
           </div>
         </div>
 
         <div id="simulation-overview" className="mt-8">
-          <h2 className="text-lg font-semibold text-zinc-950">01 Simulation overview</h2>
+          <h2 className="text-lg font-semibold text-zinc-950">01 {t("report.overview")}</h2>
         </div>
         <div className="mt-4 grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
           {[
-            ["Simulation", simulation?.id ?? "Loading..."],
-            ["Status", simulationStatus(simulation)],
-            ["Tile area", formatArea(tileAreaKm2(tile)) ?? "Unknown"],
-            ["Created", formatDate(simulation?.created)],
+            [t("common.simulation"), simulation?.id ?? t("common.loading")],
+            [t("common.status"), simulationStatus(simulation)],
+            [t("common.tileArea"), formatArea(tileAreaKm2(tile)) ?? t("common.unknown")],
+            [t("common.created"), formatDate(simulation?.created)],
           ].map(([label, value]) => (
             <div key={label} className="report-no-break rounded-lg border border-zinc-200 bg-zinc-50 px-4 py-3">
               <div className="text-xs font-semibold uppercase tracking-wider text-zinc-400">{label}</div>
@@ -509,7 +505,7 @@ export function SimulationReportPage() {
 
         <div className="mt-8 grid gap-8 lg:grid-cols-[1fr_1.2fr]">
           <div id="management-plan">
-            <h2 className="text-lg font-semibold text-zinc-950">02 Management plan</h2>
+            <h2 className="text-lg font-semibold text-zinc-950">02 {t("report.managementPlan")}</h2>
             <div className="mt-4 space-y-4">
               {tasks.length ? (
                 tasks.map((task) => (
@@ -523,20 +519,20 @@ export function SimulationReportPage() {
                 ))
               ) : (
                 <div className="rounded-lg border border-dashed border-zinc-300 p-4 text-sm text-zinc-500">
-                  No activities available for this report.
+                  {t("report.noActivities")}
                 </div>
               )}
             </div>
           </div>
 
           <div id="results">
-            <h2 className="text-lg font-semibold text-zinc-950">03 Results</h2>
+            <h2 className="text-lg font-semibold text-zinc-950">03 {t("report.results")}</h2>
             <div className="mt-4">
               {result ? (
                 <BiomassChart result={result} height={300} />
               ) : (
                 <div className="rounded-lg border border-dashed border-zinc-300 p-4 text-sm text-zinc-500">
-                  {simulationResultLoading ? "Loading simulation result..." : "No completed result is available."}
+                  {simulationResultLoading ? t("report.loadingSimulationResult") : t("report.noCompletedResult")}
                 </div>
               )}
             </div>
@@ -550,15 +546,15 @@ export function SimulationReportPage() {
             </div>
             {speciesSummaries.length ? (
               <div className="report-no-break mt-6">
-                <h3 className="text-sm font-semibold text-zinc-950">Species summaries</h3>
+                <h3 className="text-sm font-semibold text-zinc-950">{t("report.speciesSummaries")}</h3>
                 <div className="mt-3 overflow-hidden rounded-lg border border-zinc-200">
                   <table className="min-w-full text-sm">
                     <thead>
                       <tr className="border-b border-zinc-200 bg-zinc-50 text-left text-zinc-600">
-                        <th className="px-3 py-2 font-medium">Species</th>
-                        <th className="px-3 py-2 font-medium">Initial</th>
-                        <th className="px-3 py-2 font-medium">Final</th>
-                        <th className="px-3 py-2 font-medium">Change</th>
+                        <th className="px-3 py-2 font-medium">{t("common.species")}</th>
+                        <th className="px-3 py-2 font-medium">{t("common.initial")}</th>
+                        <th className="px-3 py-2 font-medium">{t("common.final")}</th>
+                        <th className="px-3 py-2 font-medium">{t("common.change")}</th>
                       </tr>
                     </thead>
                     <tbody>
@@ -574,7 +570,7 @@ export function SimulationReportPage() {
                   </table>
                 </div>
                 <div className="mt-3 rounded-md bg-zinc-50 px-3 py-2 text-sm text-zinc-600">
-                  Final result snapshot: {finalSnapshotLabel ?? "final sample"}.
+                  {t("report.finalResultSnapshot", { sample: finalSnapshotLabel ?? t("report.finalSample") })}
                 </div>
               </div>
             ) : null}
@@ -582,13 +578,13 @@ export function SimulationReportPage() {
         </div>
 
         <div id="biomass-timeline" className="report-print-break mt-8">
-          <h2 className="text-lg font-semibold text-zinc-950">04 Biomass and management timeline</h2>
+          <h2 className="text-lg font-semibold text-zinc-950">04 {t("report.biomassAndTimeline")}</h2>
           <div className="report-no-break mt-4 rounded-lg border border-zinc-200 bg-zinc-50 p-4">
             {result ? (
               <BiomassChart result={result} height={260} />
             ) : (
               <div className="rounded-lg border border-dashed border-zinc-300 p-4 text-sm text-zinc-500">
-                {simulationResultLoading ? "Loading simulation result..." : "No completed result is available."}
+                {simulationResultLoading ? t("report.loadingSimulationResult") : t("report.noCompletedResult")}
               </div>
             )}
             <div className="mt-4">

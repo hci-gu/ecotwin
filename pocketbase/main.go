@@ -5,18 +5,17 @@ import (
 	utils "app/lib/utils"
 	"bytes"
 	"database/sql"
-	"encoding/base64"
-	"encoding/binary"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"image"
 	"image/color"
+	"image/png"
 	"io"
 	"log"
 	"math"
 	"mime/multipart"
 	"net/http"
-	"net/http/httputil"
 	"net/url"
 	"os"
 	"strconv"
@@ -34,12 +33,43 @@ import (
 	"github.com/pocketbase/pocketbase/tools/filesystem"
 )
 
+func pngFileFromImage(img image.Image, name string) (*filesystem.File, error) {
+	if img == nil {
+		return nil, fmt.Errorf("cannot create %s from an empty image", name)
+	}
+
+	var buf bytes.Buffer
+	if err := png.Encode(&buf, img); err != nil {
+		return nil, err
+	}
+	return filesystem.NewFileFromBytes(buf.Bytes(), name)
+}
+
+func imageForRecordField(record *core.Record, collection *core.Collection, app core.App, field string) (image.Image, error) {
+	if files := record.GetUnsavedFiles(field); len(files) > 0 {
+		reader, err := files[0].Reader.Open()
+		if err != nil {
+			return nil, err
+		}
+		defer reader.Close()
+
+		img, _, err := image.Decode(reader)
+		return img, err
+	}
+
+	src, _ := utils.GetImageForField(record, collection, app.DataDir(), field, field+"_generated")
+	return src, nil
+}
+
 func onLandcoverUpdate(record *core.Record, collection *core.Collection, app core.App) error {
-	if record.GetString("color") == "" {
+	if record.GetString("color") == "" && len(record.GetUnsavedFiles("color")) == 0 {
 		return onLandcoverCreate(record, collection, app)
 	}
 
-	src, newFilePath := utils.GetImageForField(record, collection, app.DataDir(), "color", "color_100")
+	src, err := imageForRecordField(record, collection, app, "color")
+	if err != nil {
+		return err
+	}
 
 	resized := imaging.Resize(src, 100, 100, imaging.NearestNeighbor)
 	newImage := imaging.New(resized.Bounds().Dx(), resized.Bounds().Dy(), color.NRGBA{})
@@ -58,11 +88,11 @@ func onLandcoverUpdate(record *core.Record, collection *core.Collection, app cor
 	// encodeOpts := {
 	// 	JPEGQuality: 100,
 	// }
-	if err := imaging.Save(newImage, newFilePath, imaging.PNGCompressionLevel(-1)); err != nil {
+	file, err := pngFileFromImage(newImage, "color_100.png")
+	if err != nil {
 		return err
 	}
-
-	record.Set("color_100", utils.GetFileNameForPath(newFilePath))
+	record.Set("color_100", file)
 
 	// Calculate color percentages
 	jsonMap, _ := utils.CalculateColorPercentages(newImage, utils.Palette)
@@ -72,7 +102,14 @@ func onLandcoverUpdate(record *core.Record, collection *core.Collection, app cor
 }
 
 func onLandcoverCreate(record *core.Record, collection *core.Collection, app core.App) error {
-	src, newFilePath := utils.GetImageForField(record, collection, app.DataDir(), "original", "color")
+	if record.GetString("original") == "" && len(record.GetUnsavedFiles("original")) == 0 {
+		return nil
+	}
+
+	src, err := imageForRecordField(record, collection, app, "original")
+	if err != nil {
+		return err
+	}
 
 	newImage := imaging.New(src.Bounds().Dx(), src.Bounds().Dy(), color.NRGBA{})
 	bounds := newImage.Bounds()
@@ -84,16 +121,24 @@ func onLandcoverCreate(record *core.Record, collection *core.Collection, app cor
 			newImage.Set(x, y, closest)
 		}
 	}
-	if err := imaging.Save(newImage, newFilePath); err != nil {
+	file, err := pngFileFromImage(newImage, "color.png")
+	if err != nil {
 		return err
 	}
-	record.Set("color", strings.Split(newFilePath, "/")[len(strings.Split(newFilePath, "/"))-1])
+	record.Set("color", file)
 
 	return onLandcoverUpdate(record, collection, app)
 }
 
 func onHeightmapCreate(record *core.Record, collection *core.Collection, app core.App) error {
-	src, newFilePath := utils.GetImageForField(record, collection, app.DataDir(), "original", "heightmap")
+	if record.GetString("original") == "" && len(record.GetUnsavedFiles("original")) == 0 {
+		return nil
+	}
+
+	src, err := imageForRecordField(record, collection, app, "original")
+	if err != nil {
+		return err
+	}
 
 	// init minheight and maxheight as infinity and -infinity
 	minHeight := math.Inf(1)
@@ -134,70 +179,41 @@ func onHeightmapCreate(record *core.Record, collection *core.Collection, app cor
 		}
 	}
 
-	if err := imaging.Save(newImage, newFilePath); err != nil {
+	file, err := pngFileFromImage(newImage, "heightmap.png")
+	if err != nil {
 		return err
 	}
-	record.Set("heightmap", strings.Split(newFilePath, "/")[len(strings.Split(newFilePath, "/"))-1])
+	record.Set("heightmap", file)
 	record.Set("minHeight", minHeight)
 	record.Set("maxHeight", maxHeight)
 
 	return nil
 }
 
-type simulationUploadResponse struct {
-	ID string `json:"id"`
-}
-
-type mockSimulationResponse struct {
-	SimulationID     string                        `json:"simulation_id"`
-	WorldSize        int                           `json:"world_size"`
-	Species          []string                      `json:"species"`
-	SampleEvery      int                           `json:"sample_every"`
-	IncludeFinal     bool                          `json:"include_final"`
-	TickDurationDays int                           `json:"tick_duration_days,omitempty"`
-	StartDate        string                        `json:"start_date,omitempty"`
-	EndDate          string                        `json:"end_date,omitempty"`
-	DType            string                        `json:"dtype"`
-	Shape            []int                         `json:"shape"`
-	Steps            []int                         `json:"steps"`
-	Fitness          float64                       `json:"fitness"`
-	EpisodeLength    int                           `json:"episode_length"`
-	EndReason        string                        `json:"end_reason,omitempty"`
-	BiomassB64       string                        `json:"biomass_b64"`
-	BiomassSummary   *mockSimulationBiomassSummary `json:"biomass_summary,omitempty"`
-}
-
-type mockSimulationBiomassSummary struct {
-	RunCount        int         `json:"run_count"`
-	ConfidenceLevel float64     `json:"confidence_level"`
-	CIMethod        string      `json:"ci_method"`
-	Normalization   string      `json:"normalization"`
-	Grouping        string      `json:"grouping"`
-	Steps           []int       `json:"steps"`
-	Groups          []string    `json:"groups"`
-	GroupSpecies    [][]string  `json:"group_species"`
-	Mean            [][]float64 `json:"mean"`
-	CILow           [][]float64 `json:"ci_low"`
-	CIHigh          [][]float64 `json:"ci_high"`
-}
-
-type mockSummaryGroup struct {
-	Name          string
-	SourceSpecies []string
-	Weights       map[string]float64
-}
-
-type mockSummaryGroupWeight struct {
-	GroupIndex int
-	Weight     float64
-}
-
-type mockAgentSetSummary struct {
+type simAgentSummary struct {
 	Name    string   `json:"name"`
 	Kind    string   `json:"kind"`
 	Files   []string `json:"files"`
 	Species []string `json:"species,omitempty"`
 	Error   string   `json:"error,omitempty"`
+}
+
+type inferenceModelSummary struct {
+	ID                string   `json:"id"`
+	Name              string   `json:"name"`
+	Kind              string   `json:"kind"`
+	Species           []string `json:"species"`
+	SupportsAgeGroups bool     `json:"supports_age_groups,omitempty"`
+	Files             []string `json:"files,omitempty"`
+	Description       string   `json:"description,omitempty"`
+	Version           string   `json:"version,omitempty"`
+}
+
+type inferenceRunEnvelope struct {
+	RunID  string         `json:"run_id"`
+	Status string         `json:"status"`
+	Result map[string]any `json:"result,omitempty"`
+	Error  map[string]any `json:"error,omitempty"`
 }
 
 type normalizedActivityInput struct {
@@ -210,6 +226,7 @@ type normalizedActivityInput struct {
 	TargetScope              string             `json:"targetScope"`
 	Area                     any                `json:"area,omitempty"`
 	AreaSummary              map[string]any     `json:"areaSummary,omitempty"`
+	Areas                    []map[string]any   `json:"areas,omitempty"`
 	AffectedAreaKm2          float64            `json:"affectedAreaKm2,omitempty"`
 	AffectedSpecies          []string           `json:"affectedSpecies,omitempty"`
 	SpeciesEffortMultipliers map[string]float64 `json:"speciesEffortMultipliers,omitempty"`
@@ -276,63 +293,10 @@ const (
 	tileAssetStatusFailed     = "failed"
 	tileAssetStatusSkipped    = "skipped"
 
-	mockSimulationMaxWorldSize    = 24
-	mockSimulationDefaultMaxSteps = 300
-	mockSimulationMaxSteps        = 36500
-	mockSimulationRunCount        = 5
-	defaultSimulationTickDays     = 1
-	maxSimulationPlaybackFrames   = 96
+	defaultSimulationTicks      = 300
+	defaultSimulationTickDays   = 1
+	maxSimulationPlaybackFrames = 96
 )
-
-var mockSummaryGroups = []mockSummaryGroup{
-	{
-		Name:          "Phytoplankton",
-		SourceSpecies: []string{"phytoplankton"},
-		Weights:       map[string]float64{"phytoplankton": 1},
-	},
-	{
-		Name:          "Zooplankton",
-		SourceSpecies: []string{"zooplankton"},
-		Weights:       map[string]float64{"zooplankton": 1},
-	},
-	{
-		Name:          "Pelagic fish",
-		SourceSpecies: []string{"pelagicFish"},
-		Weights:       map[string]float64{"pelagicFish": 1},
-	},
-	{
-		Name:          "Codfish",
-		SourceSpecies: []string{"codfish"},
-		Weights:       map[string]float64{"codfish": 1},
-	},
-	{
-		Name:          "Porpoises",
-		SourceSpecies: []string{"porpoises"},
-		Weights:       map[string]float64{"porpoises": 1},
-	},
-	{
-		Name:          "Seabirds",
-		SourceSpecies: []string{"seabirds"},
-		Weights:       map[string]float64{"seabirds": 1},
-	},
-}
-
-func simulationMockEnabled() bool {
-	value := strings.TrimSpace(strings.ToLower(os.Getenv("SIMULATION_MOCK")))
-	switch value {
-	case "1", "true", "yes", "on":
-		return true
-	default:
-		return false
-	}
-}
-
-func newMockSimulationID(seed string) string {
-	if seed = strings.TrimSpace(seed); seed != "" {
-		return fmt.Sprintf("mock-%s-%d", seed, time.Now().UnixNano())
-	}
-	return fmt.Sprintf("mock-%d", time.Now().UnixNano())
-}
 
 func queryInt(query url.Values, names []string, fallback int) int {
 	for _, name := range names {
@@ -363,378 +327,6 @@ func queryBool(query url.Values, names []string, fallback bool) bool {
 	return fallback
 }
 
-func mockSimulationAgents() []mockAgentSetSummary {
-	return []mockAgentSetSummary{
-		{
-			Name:    "mock-default",
-			Kind:    "single",
-			Files:   []string{"10_$cod_9079.34.npy.npz"},
-			Species: []string{"codfish"},
-		},
-		{
-			Name: "mock-age3",
-			Kind: "multi",
-			Files: []string{
-				"12_$sprat__a0_14568.62.npy.npz",
-				"12_$sprat__a1_13210.11.npy.npz",
-				"12_$sprat__a2_15100.44.npy.npz",
-				"12_$herring__a0_12001.50.npy.npz",
-				"12_$herring__a1_11888.20.npy.npz",
-				"12_$herring__a2_12555.90.npy.npz",
-				"12_$cod__a0_9800.25.npy.npz",
-				"12_$cod__a1_10010.75.npy.npz",
-				"12_$cod__a2_10333.40.npy.npz",
-			},
-			Species: []string{
-				"phytoplankton",
-				"zooplankton",
-				"pelagicFish",
-				"codfish",
-				"porpoises",
-				"seabirds",
-			},
-		},
-		{
-			Name:  "mock-empty",
-			Kind:  "empty",
-			Files: []string{},
-		},
-	}
-}
-
-func mockSpeciesKey(label string) string {
-	base, _, ok := strings.Cut(label, "__")
-	if ok {
-		return base
-	}
-	return label
-}
-
-func mockGroupWeightsForSpecies(label string) []mockSummaryGroupWeight {
-	baseLabel := mockSpeciesKey(label)
-	weights := make([]mockSummaryGroupWeight, 0, len(mockSummaryGroups))
-	for groupIndex, group := range mockSummaryGroups {
-		if weight := group.Weights[baseLabel]; weight > 0 {
-			weights = append(weights, mockSummaryGroupWeight{
-				GroupIndex: groupIndex,
-				Weight:     weight,
-			})
-		}
-	}
-	return weights
-}
-
-func buildMockRunValues(
-	simulationID string,
-	runIndex int,
-	steps []int,
-	worldSize int,
-	species []string,
-	maxSteps int,
-) []float32 {
-	values := make([]float32, len(steps)*worldSize*worldSize*len(species))
-	offset := 0
-	idPhase := float64(len(simulationID)%17) * 0.11
-	runPhase := float64(runIndex)*0.47 + idPhase
-	runScale := 0.92 + 0.04*float64(runIndex)
-
-	for _, step := range steps {
-		progress := float64(step) / float64(maxSteps)
-		for y := 0; y < worldSize; y++ {
-			yRatio := float64(y) / float64(worldSize-1)
-			for x := 0; x < worldSize; x++ {
-				xRatio := float64(x) / float64(worldSize-1)
-				spatial := 0.65 + 0.35*math.Sin((xRatio+yRatio+progress+runPhase*0.08)*math.Pi)
-				localVariation := 1 + 0.08*math.Sin(
-					(xRatio*3.1+yRatio*2.7+progress*1.4)*math.Pi+runPhase,
-				)
-
-				for sp := range species {
-					phase := float64(sp) * 0.55
-					base := 70 - float64(sp)*8
-					if sp >= 4 {
-						base = 18 + float64(sp-4)*3
-					}
-					seasonal := math.Sin(progress*math.Pi*2 + phase + runPhase*0.16)
-					trend := 1 - math.Max(0, float64(sp)-2)*0.035*progress
-					cellValue := base*trend + base*0.22*seasonal + (10-float64(sp))*spatial
-					values[offset] = float32(math.Max(0, cellValue*runScale*localVariation))
-					offset++
-				}
-			}
-		}
-	}
-
-	return values
-}
-
-func aggregateMockSummaryGroups(
-	values []float32,
-	steps []int,
-	worldSize int,
-	species []string,
-) [][]float64 {
-	totals := make([][]float64, len(mockSummaryGroups))
-	for groupIndex := range totals {
-		totals[groupIndex] = make([]float64, len(steps))
-	}
-
-	speciesWeights := make([][]mockSummaryGroupWeight, len(species))
-	for index, label := range species {
-		speciesWeights[index] = mockGroupWeightsForSpecies(label)
-	}
-
-	offset := 0
-	for stepIndex := range steps {
-		for cell := 0; cell < worldSize*worldSize; cell++ {
-			for speciesIndex := range species {
-				value := float64(values[offset])
-				offset++
-				for _, groupWeight := range speciesWeights[speciesIndex] {
-					totals[groupWeight.GroupIndex][stepIndex] += value * groupWeight.Weight
-				}
-			}
-		}
-	}
-
-	return totals
-}
-
-func roundMockSummaryValue(value float64) float64 {
-	if math.IsNaN(value) || math.IsInf(value, 0) {
-		return 0
-	}
-	return math.Round(value*10000) / 10000
-}
-
-func mockConfidenceMargin95(values []float64) float64 {
-	if len(values) <= 1 {
-		return 0
-	}
-
-	var sum float64
-	for _, value := range values {
-		sum += value
-	}
-	mean := sum / float64(len(values))
-
-	var varianceSum float64
-	for _, value := range values {
-		diff := value - mean
-		varianceSum += diff * diff
-	}
-	variance := varianceSum / float64(len(values)-1)
-	standardError := math.Sqrt(math.Max(0, variance)) / math.Sqrt(float64(len(values)))
-
-	// t critical for a two-sided 95% interval with df = 4.
-	return 2.776 * standardError
-}
-
-func buildMockBiomassSummary(samples [][][]float64, steps []int) *mockSimulationBiomassSummary {
-	mean := make([][]float64, len(mockSummaryGroups))
-	ciLow := make([][]float64, len(mockSummaryGroups))
-	ciHigh := make([][]float64, len(mockSummaryGroups))
-	groups := make([]string, len(mockSummaryGroups))
-	groupSpecies := make([][]string, len(mockSummaryGroups))
-
-	for groupIndex, group := range mockSummaryGroups {
-		groups[groupIndex] = group.Name
-		groupSpecies[groupIndex] = append([]string(nil), group.SourceSpecies...)
-		mean[groupIndex] = make([]float64, len(steps))
-		ciLow[groupIndex] = make([]float64, len(steps))
-		ciHigh[groupIndex] = make([]float64, len(steps))
-
-		for stepIndex := range steps {
-			values := samples[groupIndex][stepIndex]
-			var sum float64
-			for _, value := range values {
-				sum += value
-			}
-
-			center := 0.0
-			if len(values) > 0 {
-				center = sum / float64(len(values))
-			}
-			margin := mockConfidenceMargin95(values)
-			mean[groupIndex][stepIndex] = roundMockSummaryValue(center)
-			ciLow[groupIndex][stepIndex] = roundMockSummaryValue(math.Max(0, center-margin))
-			ciHigh[groupIndex][stepIndex] = roundMockSummaryValue(center + margin)
-		}
-	}
-
-	return &mockSimulationBiomassSummary{
-		RunCount:        mockSimulationRunCount,
-		ConfidenceLevel: 0.95,
-		CIMethod:        "t-interval",
-		Normalization:   "relative_to_initial",
-		Grouping:        "functional_group",
-		Steps:           steps,
-		Groups:          groups,
-		GroupSpecies:    groupSpecies,
-		Mean:            mean,
-		CILow:           ciLow,
-		CIHigh:          ciHigh,
-	}
-}
-
-func buildMockBiomassEnsemble(
-	simulationID string,
-	steps []int,
-	worldSize int,
-	species []string,
-	maxSteps int,
-) ([]byte, *mockSimulationBiomassSummary) {
-	totalCells := len(steps) * worldSize * worldSize * len(species)
-	meanValues := make([]float64, totalCells)
-	summarySamples := make([][][]float64, len(mockSummaryGroups))
-	for groupIndex := range summarySamples {
-		summarySamples[groupIndex] = make([][]float64, len(steps))
-		for stepIndex := range steps {
-			summarySamples[groupIndex][stepIndex] = make([]float64, 0, mockSimulationRunCount)
-		}
-	}
-
-	for runIndex := 0; runIndex < mockSimulationRunCount; runIndex++ {
-		values := buildMockRunValues(simulationID, runIndex, steps, worldSize, species, maxSteps)
-		for index, value := range values {
-			meanValues[index] += float64(value) / float64(mockSimulationRunCount)
-		}
-
-		groupTotals := aggregateMockSummaryGroups(values, steps, worldSize, species)
-		for groupIndex, totals := range groupTotals {
-			baseline := totals[0]
-			if baseline <= 0 {
-				baseline = 1
-			}
-			for stepIndex, total := range totals {
-				summarySamples[groupIndex][stepIndex] = append(
-					summarySamples[groupIndex][stepIndex],
-					total/baseline,
-				)
-			}
-		}
-	}
-
-	raw := make([]byte, totalCells*4)
-	for index, value := range meanValues {
-		binary.LittleEndian.PutUint32(raw[index*4:], math.Float32bits(float32(value)))
-	}
-
-	return raw, buildMockBiomassSummary(summarySamples, steps)
-}
-
-func buildMockSimulationResponse(simulationID string, query url.Values) ([]byte, string, error) {
-	worldSize := queryInt(query, []string{"worldSize", "world_size"}, 20)
-	if worldSize < 4 {
-		worldSize = 4
-	}
-	if worldSize > mockSimulationMaxWorldSize {
-		worldSize = mockSimulationMaxWorldSize
-	}
-
-	maxSteps := queryInt(query, []string{"maxSteps", "max_steps"}, mockSimulationDefaultMaxSteps)
-	if maxSteps < 1 {
-		maxSteps = 1
-	}
-	if maxSteps > mockSimulationMaxSteps {
-		maxSteps = mockSimulationMaxSteps
-	}
-
-	sampleEvery := queryInt(query, []string{"sampleEvery", "sample_every"}, 10)
-	if sampleEvery < 1 {
-		sampleEvery = 1
-	}
-
-	includeFinal := queryBool(query, []string{"includeFinal", "include_final"}, true)
-	tickDurationDays := queryInt(query, []string{"tickDurationDays", "tick_duration_days"}, defaultSimulationTickDays)
-	if tickDurationDays < 1 {
-		tickDurationDays = defaultSimulationTickDays
-	}
-
-	species := append([]string(nil), simulationSpecies...)
-	steps := make([]int, 0, maxSteps/sampleEvery+2)
-	for step := 0; step <= maxSteps; step += sampleEvery {
-		steps = append(steps, step)
-	}
-	if includeFinal && steps[len(steps)-1] != maxSteps {
-		steps = append(steps, maxSteps)
-	}
-	if !includeFinal && len(steps) > 1 && steps[len(steps)-1] == maxSteps {
-		steps = steps[:len(steps)-1]
-	}
-	if len(steps) == 0 {
-		steps = append(steps, 0)
-	}
-
-	raw, summary := buildMockBiomassEnsemble(simulationID, steps, worldSize, species, maxSteps)
-	snapshotCount := len(steps)
-
-	response := mockSimulationResponse{
-		SimulationID:     simulationID,
-		WorldSize:        worldSize,
-		Species:          species,
-		SampleEvery:      sampleEvery,
-		IncludeFinal:     includeFinal,
-		TickDurationDays: tickDurationDays,
-		StartDate:        firstNonEmptyString(query.Get("startDate"), query.Get("start_date")),
-		EndDate:          firstNonEmptyString(query.Get("endDate"), query.Get("end_date")),
-		DType:            "float32",
-		Shape:            []int{snapshotCount, worldSize, worldSize, len(species)},
-		Steps:            steps,
-		Fitness:          float64(maxSteps) * 12.5,
-		EpisodeLength:    maxSteps,
-		EndReason:        "completed",
-		BiomassB64:       base64.StdEncoding.EncodeToString(raw),
-		BiomassSummary:   summary,
-	}
-
-	body, err := json.Marshal(response)
-	if err != nil {
-		return nil, "", err
-	}
-
-	return body, "application/json", nil
-}
-
-func findOrCreateSimulationRecord(app core.App, simulationId string) (*core.Record, error) {
-	collection, err := app.FindCollectionByNameOrId("simulations")
-	if err != nil {
-		return nil, err
-	}
-
-	record, err := app.FindFirstRecordByData(collection, "simulationId", simulationId)
-	if err == nil {
-		return record, nil
-	}
-	if !errors.Is(err, sql.ErrNoRows) {
-		return nil, err
-	}
-
-	record = core.NewRecord(collection)
-	record.Set("simulationId", simulationId)
-	if err := app.Save(record); err != nil {
-		return nil, err
-	}
-
-	return record, nil
-}
-
-func serveSimulationCachedFile(app core.App, re *core.RequestEvent, record *core.Record, filename string, contentType string) error {
-	fsys, err := app.NewFilesystem()
-	if err != nil {
-		return err
-	}
-	defer fsys.Close()
-
-	reader, err := fsys.GetReader(record.BaseFilesPath() + "/" + filename)
-	if err != nil {
-		return err
-	}
-	defer reader.Close()
-
-	return re.Stream(http.StatusOK, contentType, reader)
-}
-
 func readRecordFileBytes(app core.App, record *core.Record, filename string) ([]byte, error) {
 	if filename == "" {
 		return nil, errors.New("missing filename")
@@ -754,6 +346,16 @@ func readRecordFileBytes(app core.App, record *core.Record, filename string) ([]
 	defer reader.Close()
 
 	return io.ReadAll(reader)
+}
+
+func markSimulationFailed(app core.App, simulation *core.Record) {
+	if simulation == nil {
+		return
+	}
+	simulation.Set("status", "failed")
+	if err := app.Save(simulation); err != nil {
+		log.Printf("simulation/run: failed to mark simulation %q failed: %v", simulation.Id, err)
+	}
 }
 
 func firstNonEmptyString(values ...string) string {
@@ -793,6 +395,21 @@ func optionalMap(value any) map[string]any {
 		return nil
 	}
 	var decoded map[string]any
+	if err := json.Unmarshal(raw, &decoded); err != nil {
+		return nil
+	}
+	return decoded
+}
+
+func optionalMapSlice(value any) []map[string]any {
+	if value == nil {
+		return nil
+	}
+	raw, err := json.Marshal(value)
+	if err != nil {
+		return nil
+	}
+	var decoded []map[string]any
 	if err := json.Unmarshal(raw, &decoded); err != nil {
 		return nil
 	}
@@ -845,6 +462,26 @@ func parseTileBBox(raw string) ([4]float64, bool) {
 	return bbox, true
 }
 
+func numericValue(raw any) (float64, bool) {
+	switch value := raw.(type) {
+	case float64:
+		if math.IsNaN(value) || math.IsInf(value, 0) {
+			return 0, false
+		}
+		return value, true
+	case int:
+		return float64(value), true
+	case json.Number:
+		parsed, err := value.Float64()
+		if err != nil || math.IsNaN(parsed) || math.IsInf(parsed, 0) {
+			return 0, false
+		}
+		return parsed, true
+	default:
+		return 0, false
+	}
+}
+
 func bboxAreaKm2(raw string) float64 {
 	bbox, ok := parseTileBBox(raw)
 	if !ok {
@@ -858,6 +495,168 @@ func bboxAreaKm2(raw string) float64 {
 	maxLat := bbox[3] * math.Pi / 180
 	area := earthRadiusMeters * earthRadiusMeters * math.Abs(maxLng-minLng) * math.Abs(math.Sin(maxLat)-math.Sin(minLat))
 	return area / 1_000_000
+}
+
+func normalizedActivityImpact(activity normalizedActivityInput) float64 {
+	if activity.Parameters == nil {
+		return 1
+	}
+	value, ok := numberFromMap(activity.Parameters, "impact")
+	if !ok {
+		return 1
+	}
+	if value < 0 {
+		return 0
+	}
+	if value > 5 {
+		value = 5
+	}
+	return value / 5
+}
+
+func polygonRingsFromGeoJSON(value any) [][][2]float64 {
+	geometry := optionalMap(value)
+	if geometry == nil {
+		return nil
+	}
+	if requireStringFromMap(geometry, "type") != "Polygon" {
+		return nil
+	}
+
+	rawCoordinates, ok := geometry["coordinates"].([]any)
+	if !ok || len(rawCoordinates) == 0 {
+		return nil
+	}
+
+	rings := make([][][2]float64, 0, len(rawCoordinates))
+	for _, rawRing := range rawCoordinates {
+		points, ok := rawRing.([]any)
+		if !ok || len(points) < 4 {
+			continue
+		}
+
+		ring := make([][2]float64, 0, len(points))
+		for _, rawPoint := range points {
+			point, ok := rawPoint.([]any)
+			if !ok || len(point) < 2 {
+				continue
+			}
+			lng, okLng := numericValue(point[0])
+			lat, okLat := numericValue(point[1])
+			if !okLng || !okLat {
+				continue
+			}
+			ring = append(ring, [2]float64{lng, lat})
+		}
+		if len(ring) >= 4 {
+			rings = append(rings, ring)
+		}
+	}
+	return rings
+}
+
+func activityAreaGeometries(activity normalizedActivityInput) []any {
+	areas := make([]any, 0, len(activity.Areas)+1)
+	for _, entry := range activity.Areas {
+		if area := entry["area"]; area != nil {
+			areas = append(areas, area)
+		}
+	}
+	if len(areas) == 0 && activity.Area != nil {
+		areas = append(areas, activity.Area)
+	}
+	return areas
+}
+
+func pointInRing(lng float64, lat float64, ring [][2]float64) bool {
+	inside := false
+	j := len(ring) - 1
+	for i := range ring {
+		xi, yi := ring[i][0], ring[i][1]
+		xj, yj := ring[j][0], ring[j][1]
+		denominator := yj - yi
+		if math.Abs(denominator) > 1e-12 {
+			intersects := ((yi > lat) != (yj > lat)) &&
+				(lng < (xj-xi)*(lat-yi)/denominator+xi)
+			if intersects {
+				inside = !inside
+			}
+		}
+		j = i
+	}
+	return inside
+}
+
+func pointInPolygon(lng float64, lat float64, rings [][][2]float64) bool {
+	if len(rings) == 0 || !pointInRing(lng, lat, rings[0]) {
+		return false
+	}
+	for _, hole := range rings[1:] {
+		if pointInRing(lng, lat, hole) {
+			return false
+		}
+	}
+	return true
+}
+
+func encodeGrayPNG(img *image.Gray) ([]byte, error) {
+	var buf bytes.Buffer
+	if err := png.Encode(&buf, img); err != nil {
+		return nil, err
+	}
+	return buf.Bytes(), nil
+}
+
+func impactNoisePNGForInference(input *normalizedSimulationInput, width int, height int) ([]byte, error) {
+	if input == nil || width <= 0 || height <= 0 {
+		return nil, errors.New("impact noise raster requires simulation input and positive dimensions")
+	}
+	bbox, ok := parseTileBBox(input.TileBBox)
+	if !ok {
+		return nil, errors.New("impact noise raster requires tile bbox")
+	}
+
+	impact := image.NewGray(image.Rect(0, 0, width, height))
+	for _, activity := range input.Activities {
+		if activity.Type != "windFarm" && activity.Type != "seaLane" {
+			continue
+		}
+
+		value := uint8(math.Round(normalizedActivityImpact(activity) * 255))
+		if value == 0 {
+			continue
+		}
+
+		for _, area := range activityAreaGeometries(activity) {
+			rings := polygonRingsFromGeoJSON(area)
+			if len(rings) == 0 {
+				continue
+			}
+
+			for y := 0; y < height; y++ {
+				lat := bbox[3] - ((float64(y)+0.5)/float64(height))*(bbox[3]-bbox[1])
+				for x := 0; x < width; x++ {
+					lng := bbox[0] + ((float64(x)+0.5)/float64(width))*(bbox[2]-bbox[0])
+					if !pointInPolygon(lng, lat, rings) {
+						continue
+					}
+					offset := y*impact.Stride + x
+					if value > impact.Pix[offset] {
+						impact.Pix[offset] = value
+					}
+				}
+			}
+		}
+	}
+
+	blurred := imaging.Blur(impact, 2.2)
+	normalized := image.NewGray(blurred.Bounds())
+	for y := normalized.Bounds().Min.Y; y < normalized.Bounds().Max.Y; y++ {
+		for x := normalized.Bounds().Min.X; x < normalized.Bounds().Max.X; x++ {
+			normalized.SetGray(x, y, color.GrayModel.Convert(blurred.At(x, y)).(color.Gray))
+		}
+	}
+	return encodeGrayPNG(normalized)
 }
 
 func numberFromMap(data map[string]any, key string) (float64, bool) {
@@ -972,8 +771,8 @@ func buildNormalizedSimulationInput(app core.App, plan *core.Record, tile *core.
 		PlanID:           plan.Id,
 		PlanName:         plan.GetString("name"),
 		TickDurationDays: defaultSimulationTickDays,
-		SimulationTicks:  mockSimulationDefaultMaxSteps,
-		SampleEvery:      sampleEveryForSimulationTicks(mockSimulationDefaultMaxSteps),
+		SimulationTicks:  defaultSimulationTicks,
+		SampleEvery:      sampleEveryForSimulationTicks(defaultSimulationTicks),
 		TileID:           tile.Id,
 		TileName:         tile.GetString("name"),
 		TileBBox:         tile.GetString("bbox"),
@@ -1060,14 +859,45 @@ func buildNormalizedSimulationInput(app core.App, plan *core.Record, tile *core.
 		}
 
 		if targetScope == "polygon" {
-			area := data["area"]
-			if area == nil {
-				return nil, fmt.Errorf("activity %q is missing polygon area", task.GetString("name"))
+			areaEntries := optionalMapSlice(data["areas"])
+			if len(areaEntries) > 0 {
+				activity.Areas = make([]map[string]any, 0, len(areaEntries))
+				var totalAreaKm2 float64
+				for _, entry := range areaEntries {
+					area := entry["area"]
+					if area == nil {
+						continue
+					}
+					areaSummary := optionalMap(entry["areaSummary"])
+					activity.Areas = append(activity.Areas, map[string]any{
+						"area":        area,
+						"areaSummary": areaSummary,
+					})
+					if areaKm2, ok := numberFromMap(areaSummary, "areaKm2"); ok {
+						totalAreaKm2 += areaKm2
+					}
+				}
+				if len(activity.Areas) > 0 {
+					activity.Area = activity.Areas[0]["area"]
+					activity.AreaSummary = optionalMap(activity.Areas[0]["areaSummary"])
+					activity.AffectedAreaKm2 = totalAreaKm2
+				}
 			}
-			activity.Area = area
-			activity.AreaSummary = optionalMap(data["areaSummary"])
-			if areaKm2, ok := numberFromMap(activity.AreaSummary, "areaKm2"); ok {
-				activity.AffectedAreaKm2 = areaKm2
+
+			if activity.Area == nil {
+				area := data["area"]
+				if area == nil {
+					return nil, fmt.Errorf("activity %q is missing polygon area", task.GetString("name"))
+				}
+				activity.Area = area
+				activity.AreaSummary = optionalMap(data["areaSummary"])
+				if areaKm2, ok := numberFromMap(activity.AreaSummary, "areaKm2"); ok {
+					activity.AffectedAreaKm2 = areaKm2
+				}
+			}
+
+			if activity.Area == nil {
+				return nil, fmt.Errorf("activity %q is missing polygon area", task.GetString("name"))
 			}
 		} else {
 			activity.AffectedAreaKm2 = tileArea
@@ -1128,6 +958,108 @@ func buildNormalizedSimulationInput(app core.App, plan *core.Record, tile *core.
 	return input, nil
 }
 
+func impactOverrideFromOptions(options any, activityType string) (float64, bool) {
+	optionMap := optionalMap(options)
+	if optionMap == nil {
+		return 0, false
+	}
+
+	impacts := optionalMap(optionMap["demoActivityImpacts"])
+	if impacts == nil {
+		impacts = optionalMap(optionMap["activityImpacts"])
+	}
+	if impacts == nil {
+		return 0, false
+	}
+
+	value, ok := numberFromMap(impacts, activityType)
+	if !ok {
+		return 0, false
+	}
+	if value < 0 {
+		value = 0
+	}
+	if value > 5 {
+		value = 5
+	}
+	return value, true
+}
+
+func applySimulationActivityImpactOverrides(options any, input *normalizedSimulationInput) {
+	if input == nil {
+		return
+	}
+
+	parameterNameByActivityType := map[string]string{
+		"trawlArea": "trawlingImpact",
+		"windFarm":  "noiseImpact",
+		"seaLane":   "rotorImpact",
+	}
+
+	for index := range input.Activities {
+		activity := &input.Activities[index]
+		impact, ok := impactOverrideFromOptions(options, activity.Type)
+		if !ok {
+			continue
+		}
+		if activity.Parameters == nil {
+			activity.Parameters = map[string]any{}
+		}
+		activity.Parameters["impact"] = impact
+		if parameterName := parameterNameByActivityType[activity.Type]; parameterName != "" {
+			activity.Parameters[parameterName] = impact
+		}
+	}
+}
+
+func disabledSimulationTaskIds(options any) map[string]bool {
+	optionMap := optionalMap(options)
+	if optionMap == nil {
+		return nil
+	}
+
+	raw, ok := optionMap["disabledTaskIds"]
+	if !ok {
+		raw = optionMap["demoDisabledTaskIds"]
+	}
+	rawIds, ok := raw.([]any)
+	if !ok || len(rawIds) == 0 {
+		return nil
+	}
+
+	disabled := make(map[string]bool, len(rawIds))
+	for _, rawId := range rawIds {
+		id, ok := rawId.(string)
+		if !ok {
+			continue
+		}
+		id = strings.TrimSpace(id)
+		if id != "" {
+			disabled[id] = true
+		}
+	}
+	return disabled
+}
+
+func applyDisabledSimulationTasks(options any, input *normalizedSimulationInput) {
+	if input == nil || len(input.Activities) == 0 {
+		return
+	}
+	disabled := disabledSimulationTaskIds(options)
+	if len(disabled) == 0 {
+		return
+	}
+
+	activities := input.Activities[:0]
+	for _, activity := range input.Activities {
+		if disabled[activity.ID] {
+			continue
+		}
+		activities = append(activities, activity)
+	}
+	input.Activities = activities
+}
+
 func mergeSimulationOptions(options any, input *normalizedSimulationInput) ([]byte, error) {
 	merged := map[string]any{}
 	if options != nil {
@@ -1177,8 +1109,12 @@ func ensureTilePopulationJob(app core.App, tileId string, kind string) error {
 		},
 	)
 	if err == nil {
-		if existing.GetString("status") == "" {
+		status := existing.GetString("status")
+		if status == "" || status == tilePopulationJobFailed {
 			existing.Set("status", tilePopulationJobPending)
+			existing.Set("lastError", "")
+			existing.Set("leaseUntil", "")
+			existing.Set("finishedAt", "")
 			return app.Save(existing)
 		}
 
@@ -1208,64 +1144,126 @@ func enqueueTilePopulation(app core.App, tile *core.Record) error {
 	return ensureTilePopulationJob(app, tile.Id, tilePopulationKindLandcover)
 }
 
-func uploadSimulationMap(
-	ctx *core.RequestEvent,
-	httpClient *http.Client,
-	targetURL *url.URL,
-	texture []byte,
-	depth []byte,
-	optionsJSON []byte,
-	query string,
-) ([]byte, int, string, error) {
+func populateTileAssets(app core.App, tile *core.Record) error {
+	x := tile.GetInt("x")
+	y := tile.GetInt("y")
+	zoom := tile.GetInt("zoom")
+
+	if tile.GetString("satellite") == "" {
+		image := mapbox.DownloadSatelliteTile(x, y, zoom)
+		file, err := pngFileFromImage(image, "satellite.png")
+		if err != nil {
+			return err
+		}
+		tile.Set("satellite", file)
+	}
+
+	if tile.GetFloat("metersPerPixel") == 0 {
+		bboxString := tile.GetString("bbox")
+		tile.Set("metersPerPixel", mapbox.MeterPerPixelFromBboxAndZoom(zoom, bboxString))
+	}
+
+	if tile.GetString("heightmap") == "" {
+		image := mapbox.DownloadHeightmapTile(x, y, zoom)
+		if image == nil {
+			log.Printf("tile %d/%d/%d: heightmap download failed; creating tile without heightmap", zoom, x, y)
+			tile.Set("heightmap", "")
+			tile.Set("metersPerPixel", tile.GetFloat("metersPerPixel"))
+			tile.Set("landcoverStatus", tileAssetStatusPending)
+			tile.Set("oceanDataStatus", "")
+			return nil
+		}
+
+		collection, err := app.FindCollectionByNameOrId("heightmaps")
+		if err != nil {
+			return err
+		}
+
+		heightmap := core.NewRecord(collection)
+		file, err := pngFileFromImage(image, "heightmap_original.png")
+		if err != nil {
+			return err
+		}
+		heightmap.Set("original", file)
+		if err := onHeightmapCreate(heightmap, collection, app); err != nil {
+			return err
+		}
+		if err := app.Save(heightmap); err != nil {
+			return err
+		}
+
+		tile.Set("heightmap", heightmap.Id)
+	}
+
+	tile.Set("landcoverStatus", tileAssetStatusPending)
+	tile.Set("oceanDataStatus", "")
+	return nil
+}
+
+func imageDimensions(data []byte) (int, int, error) {
+	cfg, _, err := image.DecodeConfig(bytes.NewReader(data))
+	if err != nil {
+		return 0, 0, err
+	}
+	if cfg.Width <= 0 || cfg.Height <= 0 {
+		return 0, 0, errors.New("image has invalid dimensions")
+	}
+	return cfg.Width, cfg.Height, nil
+}
+
+func landcoverTextureForInference(data []byte) ([]byte, error) {
+	src, _, err := image.Decode(bytes.NewReader(data))
+	if err != nil {
+		return nil, err
+	}
+
+	bounds := src.Bounds()
+	mask := image.NewGray(image.Rect(0, 0, bounds.Dx(), bounds.Dy()))
+	water := utils.Palette[0].Color
+	for y := 0; y < bounds.Dy(); y++ {
+		for x := 0; x < bounds.Dx(); x++ {
+			current := color.NRGBAModel.Convert(src.At(bounds.Min.X+x, bounds.Min.Y+y)).(color.NRGBA)
+			value := uint8(255)
+			if current.R == water.R && current.G == water.G && current.B == water.B {
+				value = 0
+			}
+			mask.SetGray(x, y, color.Gray{Y: value})
+		}
+	}
+
 	var buf bytes.Buffer
-	writer := multipart.NewWriter(&buf)
-
-	if err := writer.WriteField("options", string(optionsJSON)); err != nil {
-		return nil, 0, "", err
+	if err := png.Encode(&buf, mask); err != nil {
+		return nil, err
 	}
+	return buf.Bytes(), nil
+}
 
-	texturePart, err := writer.CreateFormFile("texture", "map.png")
+func fetchInferenceModels(
+	source *http.Request,
+	httpClient *http.Client,
+	inferenceURL *url.URL,
+) ([]inferenceModelSummary, []byte, int, string, error) {
+	upURL := *inferenceURL
+	upURL.Path = "/v1/models"
+	upURL.RawQuery = ""
+
+	req, err := http.NewRequestWithContext(source.Context(), http.MethodGet, upURL.String(), nil)
 	if err != nil {
-		return nil, 0, "", err
+		return nil, nil, 0, "", err
 	}
-	if _, err := texturePart.Write(texture); err != nil {
-		return nil, 0, "", err
-	}
-
-	depthPart, err := writer.CreateFormFile("depth", "depth.png")
-	if err != nil {
-		return nil, 0, "", err
-	}
-	if _, err := depthPart.Write(depth); err != nil {
-		return nil, 0, "", err
-	}
-
-	if err := writer.Close(); err != nil {
-		return nil, 0, "", err
-	}
-
-	upURL := *targetURL
-	upURL.Path = "/simulate/upload"
-	upURL.RawQuery = query
-
-	req, err := http.NewRequestWithContext(ctx.Request.Context(), http.MethodPost, upURL.String(), &buf)
-	if err != nil {
-		return nil, 0, "", err
-	}
-	req.Header.Set("Content-Type", writer.FormDataContentType())
 	req.Header.Set("Accept", "application/json")
 	req.Header.Del("Accept-Encoding")
-	req.Host = targetURL.Host
+	req.Host = inferenceURL.Host
 
 	resp, err := httpClient.Do(req)
 	if err != nil {
-		return nil, 0, "", err
+		return nil, nil, 0, "", err
 	}
 	defer resp.Body.Close()
 
 	body, err := io.ReadAll(resp.Body)
 	if err != nil {
-		return nil, 0, "", err
+		return nil, nil, 0, "", err
 	}
 
 	contentType := resp.Header.Get("Content-Type")
@@ -1273,123 +1271,307 @@ func uploadSimulationMap(
 		contentType = "application/json"
 	}
 
-	return body, resp.StatusCode, contentType, nil
+	if resp.StatusCode < 200 || resp.StatusCode > 299 {
+		return nil, body, resp.StatusCode, contentType, nil
+	}
+
+	var models []inferenceModelSummary
+	if err := json.Unmarshal(body, &models); err != nil {
+		return nil, body, resp.StatusCode, contentType, err
+	}
+	return models, body, resp.StatusCode, contentType, nil
 }
 
-func handleSimulateRunAndCache(
-	app core.App,
-	httpClient *http.Client,
-	targetURL *url.URL,
-	re *core.RequestEvent,
-	simulationId string,
-) error {
-	if simulationId == "" {
-		return re.BadRequestError("Missing simulation id.", nil)
+func inferenceModelsToAgents(models []inferenceModelSummary) []simAgentSummary {
+	agents := make([]simAgentSummary, 0, len(models))
+	for _, model := range models {
+		kind := "multi"
+		if len(model.Files) == 0 {
+			kind = "empty"
+		} else if len(model.Files) == 1 {
+			kind = "single"
+		}
+		name := firstNonEmptyString(model.ID, model.Name)
+		if name == "" {
+			name = "model"
+		}
+		agents = append(agents, simAgentSummary{
+			Name:    name,
+			Kind:    kind,
+			Files:   append([]string{}, model.Files...),
+			Species: append([]string(nil), model.Species...),
+		})
+	}
+	return agents
+}
+
+func optionString(options any, names ...string) string {
+	optionMap := optionalMap(options)
+	if optionMap == nil {
+		return ""
+	}
+	for _, name := range names {
+		if value, ok := optionMap[name].(string); ok && strings.TrimSpace(value) != "" {
+			return strings.TrimSpace(value)
+		}
+	}
+	return ""
+}
+
+func optionInt(options any, names []string, fallback int) int {
+	optionMap := optionalMap(options)
+	if optionMap == nil {
+		return fallback
+	}
+	for _, name := range names {
+		if value, ok := numberFromMap(optionMap, name); ok {
+			return int(math.Round(value))
+		}
+	}
+	return fallback
+}
+
+func firstQueryValue(query url.Values, names ...string) string {
+	for _, name := range names {
+		if value := strings.TrimSpace(query.Get(name)); value != "" {
+			return value
+		}
+	}
+	return ""
+}
+
+func selectInferenceModel(
+	models []inferenceModelSummary,
+	query url.Values,
+	options any,
+) (inferenceModelSummary, error) {
+	if len(models) == 0 {
+		return inferenceModelSummary{}, errors.New("inference API returned no available models")
 	}
 
-	format := strings.ToLower(re.Request.URL.Query().Get("format"))
-	if format == "" {
-		format = "base64"
-	}
-
-	var (
-		fieldName   string
-		contentType string
-		ext         string
+	preferred := firstNonEmptyString(
+		firstQueryValue(query, "modelId", "model", "agent", "agentSet", "agent_set", "agents"),
+		optionString(options, "modelId", "model", "agent", "agentSet", "agent_set", "agents"),
 	)
-
-	switch format {
-	case "base64":
-		fieldName = "resultJson"
-		contentType = "application/json"
-		ext = "json"
-	case "npz":
-		fieldName = "resultNpz"
-		contentType = "application/octet-stream"
-		ext = "npz"
-	default:
-		return re.BadRequestError("Invalid format (expects base64 or npz).", nil)
-	}
-
-	// serve cached response if available
-	if simCollection, err := app.FindCollectionByNameOrId("simulations"); err == nil {
-		if record, err := app.FindFirstRecordByData(simCollection, "simulationId", simulationId); err == nil {
-			if filename := record.GetString(fieldName); filename != "" {
-				if err := serveSimulationCachedFile(app, re, record, filename, contentType); err == nil {
-					return nil
-				}
+	if preferred != "" {
+		for _, model := range models {
+			if model.ID == preferred || model.Name == preferred {
+				return model, nil
 			}
 		}
+		log.Printf("inference: requested model %q was not found; falling back to %q", preferred, models[0].ID)
 	}
 
-	if simulationMockEnabled() {
-		if format != "base64" {
-			return re.BadRequestError("Mock simulation supports only format=base64.", nil)
-		}
+	return models[0], nil
+}
 
-		body, mockContentType, err := buildMockSimulationResponse(simulationId, re.Request.URL.Query())
+func inferenceRunID(seed string) string {
+	if seed = strings.TrimSpace(seed); seed != "" {
+		return fmt.Sprintf("mareld-%s-%d", seed, time.Now().UnixNano())
+	}
+	return fmt.Sprintf("mareld-%d", time.Now().UnixNano())
+}
+
+func buildInferenceRunRequest(
+	runID string,
+	model inferenceModelSummary,
+	input *normalizedSimulationInput,
+	query url.Values,
+	options any,
+	width int,
+	height int,
+) map[string]any {
+	maxSteps := queryInt(query, []string{"maxSteps", "max_steps"}, input.SimulationTicks)
+	if maxSteps < 0 {
+		maxSteps = 0
+	}
+	sampleEvery := queryInt(query, []string{"sampleEvery", "sample_every"}, input.SampleEvery)
+	if sampleEvery <= 0 {
+		sampleEvery = 1
+	}
+	tickDurationDays := queryInt(query, []string{"tickDurationDays", "tick_duration_days"}, input.TickDurationDays)
+	if tickDurationDays <= 0 {
+		tickDurationDays = 1
+	}
+	replicates := queryInt(
+		query,
+		[]string{"runs", "runCount", "run_count", "replicates"},
+		optionInt(options, []string{"runs", "runCount", "run_count", "replicates"}, 1),
+	)
+	if replicates < 1 {
+		replicates = 1
+	}
+
+	grid := map[string]any{
+		"width":             width,
+		"height":            height,
+		"coordinate_system": "EPSG:4326",
+	}
+	if bbox, ok := parseTileBBox(input.TileBBox); ok {
+		grid["bbox"] = []float64{bbox[0], bbox[1], bbox[2], bbox[3]}
+	}
+
+	timeCfg := map[string]any{
+		"max_steps":          maxSteps,
+		"sample_every":       sampleEvery,
+		"include_final":      queryBool(query, []string{"includeFinal", "include_final"}, true),
+		"tick_duration_days": tickDurationDays,
+	}
+	if startDate := firstNonEmptyString(firstQueryValue(query, "startDate", "start_date"), input.PlanStart); startDate != "" {
+		timeCfg["start_date"] = startDate
+	}
+	if endDate := firstNonEmptyString(firstQueryValue(query, "endDate", "end_date"), input.PlanEnd); endDate != "" {
+		timeCfg["end_date"] = endDate
+	}
+
+	modelPayload := map[string]any{
+		"id": model.ID,
+	}
+	if agentSet := firstNonEmptyString(firstQueryValue(query, "agentSet", "agent_set", "agent", "agents"), optionString(options, "agentSet", "agent_set", "agent", "agents")); agentSet != "" {
+		modelPayload["agent_set"] = agentSet
+	}
+	if modelPath := firstNonEmptyString(firstQueryValue(query, "modelPath", "model_path"), optionString(options, "modelPath", "model_path")); modelPath != "" {
+		modelPayload["model_path"] = modelPath
+	}
+
+	return map[string]any{
+		"run_id":  runID,
+		"model":   modelPayload,
+		"grid":    grid,
+		"time":    timeCfg,
+		"species": append([]string(nil), model.Species...),
+		// First MARELD integration intentionally skips ECOTWIN pressures until
+		// the inference API supports the full activity set.
+		"pressures": []any{},
+		"output": map[string]any{
+			"dtype":                 "float32",
+			"tensor_order":          "frame,row,column,species",
+			"include_summary":       true,
+			"summary_normalization": "relative_to_initial",
+			"replicates":            replicates,
+		},
+	}
+}
+
+func inferenceResultBodyForUI(body []byte, fallbackRunID string) ([]byte, string, error) {
+	var envelope inferenceRunEnvelope
+	if err := json.Unmarshal(body, &envelope); err != nil {
+		return nil, "", err
+	}
+	if envelope.Status != "" && envelope.Status != "completed" {
+		return nil, envelope.RunID, fmt.Errorf("inference run returned status %q", envelope.Status)
+	}
+	if envelope.Result == nil {
+		return nil, envelope.RunID, errors.New("inference response is missing result")
+	}
+
+	runID := firstNonEmptyString(envelope.RunID, fallbackRunID)
+	if value, ok := envelope.Result["run_id"].(string); ok {
+		runID = firstNonEmptyString(value, runID)
+	}
+	if runID != "" {
+		envelope.Result["simulation_id"] = runID
+	}
+	if summary, ok := envelope.Result["summary"]; ok {
+		envelope.Result["biomass_summary"] = summary
+		delete(envelope.Result, "summary")
+	}
+
+	uiBody, err := json.Marshal(envelope.Result)
+	if err != nil {
+		return nil, runID, err
+	}
+	return uiBody, runID, nil
+}
+
+func runMareldInference(
+	re *core.RequestEvent,
+	httpClient *http.Client,
+	inferenceURL *url.URL,
+	runRequest map[string]any,
+	texture []byte,
+	depth []byte,
+	impactNoise []byte,
+) ([]byte, int, string, string, error) {
+	var buf bytes.Buffer
+	writer := multipart.NewWriter(&buf)
+
+	requestJSON, err := json.Marshal(runRequest)
+	if err != nil {
+		return nil, 0, "", "", err
+	}
+	if err := writer.WriteField("request", string(requestJSON)); err != nil {
+		return nil, 0, "", "", err
+	}
+
+	texturePart, err := writer.CreateFormFile("texture", "texture.png")
+	if err != nil {
+		return nil, 0, "", "", err
+	}
+	if _, err := texturePart.Write(texture); err != nil {
+		return nil, 0, "", "", err
+	}
+
+	depthPart, err := writer.CreateFormFile("depth", "depth.png")
+	if err != nil {
+		return nil, 0, "", "", err
+	}
+	if _, err := depthPart.Write(depth); err != nil {
+		return nil, 0, "", "", err
+	}
+
+	if len(impactNoise) > 0 {
+		impactNoisePart, err := writer.CreateFormFile("noise_impact", "noise_impact.png")
 		if err != nil {
-			return re.InternalServerError("Failed to generate mock simulation response.", err)
+			return nil, 0, "", "", err
 		}
-
-		if record, err := findOrCreateSimulationRecord(app, simulationId); err == nil {
-			if file, fileErr := filesystem.NewFileFromBytes(body, "simulation_result.json"); fileErr == nil {
-				record.Set(fieldName, file)
-				if saveErr := app.Save(record); saveErr != nil {
-					log.Printf("simulate/mock: failed to save cached result for %q: %v", simulationId, saveErr)
-				}
-			}
+		if _, err := impactNoisePart.Write(impactNoise); err != nil {
+			return nil, 0, "", "", err
 		}
-
-		return re.Blob(http.StatusOK, mockContentType, body)
 	}
 
-	// otherwise proxy to upstream and cache the response
-	upURL := *targetURL
-	upURL.Path = "/simulate/" + simulationId
-	upURL.RawQuery = re.Request.URL.RawQuery
-
-	upReq, err := http.NewRequestWithContext(re.Request.Context(), http.MethodGet, upURL.String(), nil)
-	if err != nil {
-		return re.InternalServerError("Failed to build upstream request.", err)
+	if err := writer.Close(); err != nil {
+		return nil, 0, "", "", err
 	}
-	upReq.Header = re.Request.Header.Clone()
-	upReq.Header.Del("Accept-Encoding") // let net/http handle decompression
-	upReq.Host = targetURL.Host
 
-	resp, err := httpClient.Do(upReq)
+	upURL := *inferenceURL
+	upURL.Path = "/v1/runs"
+	upURL.RawQuery = ""
+
+	req, err := http.NewRequestWithContext(re.Request.Context(), http.MethodPost, upURL.String(), &buf)
 	if err != nil {
-		return re.InternalServerError("Failed to contact simulation upstream.", err)
+		return nil, 0, "", "", err
+	}
+	req.Header.Set("Content-Type", writer.FormDataContentType())
+	req.Header.Set("Accept", "application/json")
+	req.Header.Del("Accept-Encoding")
+	req.Host = inferenceURL.Host
+
+	resp, err := httpClient.Do(req)
+	if err != nil {
+		return nil, 0, "", "", err
 	}
 	defer resp.Body.Close()
 
 	body, err := io.ReadAll(resp.Body)
 	if err != nil {
-		return re.InternalServerError("Failed to read simulation upstream response.", err)
+		return nil, 0, "", "", err
 	}
 
-	if resp.StatusCode >= 200 && resp.StatusCode <= 299 {
-		record, err := findOrCreateSimulationRecord(app, simulationId)
-		if err != nil {
-			log.Printf("simulate/run: failed to find or create simulations record for %q: %v", simulationId, err)
-		} else {
-			file, err := filesystem.NewFileFromBytes(body, "simulation_result."+ext)
-			if err != nil {
-				log.Printf("simulate/run: failed to create result file for %q: %v", simulationId, err)
-			} else {
-				record.Set(fieldName, file)
-				if err := app.Save(record); err != nil {
-					log.Printf("simulate/run: failed to save cached result for %q: %v", simulationId, err)
-				}
-			}
-		}
+	contentType := resp.Header.Get("Content-Type")
+	if contentType == "" {
+		contentType = "application/json"
+	}
+	if resp.StatusCode < 200 || resp.StatusCode > 299 {
+		return body, resp.StatusCode, contentType, "", nil
 	}
 
-	if ct := resp.Header.Get("Content-Type"); ct != "" {
-		contentType = ct
+	fallbackRunID, _ := runRequest["run_id"].(string)
+	uiBody, runID, err := inferenceResultBodyForUI(body, fallbackRunID)
+	if err != nil {
+		return body, resp.StatusCode, contentType, runID, err
 	}
-
-	return re.Blob(resp.StatusCode, contentType, body)
+	return uiBody, http.StatusOK, "application/json", runID, nil
 }
 
 func main() {
@@ -1402,114 +1584,49 @@ func main() {
 	})
 
 	app.OnRecordCreateRequest("tiles").BindFunc(func(e *core.RecordRequestEvent) error {
+		if err := populateTileAssets(app, e.Record); err != nil {
+			return err
+		}
+
 		if err := e.Next(); err != nil {
 			return err
 		}
 
-		x := e.Record.GetInt("x")
-		y := e.Record.GetInt("y")
-		zoom := e.Record.GetInt("zoom")
-		image := mapbox.DownloadSatelliteTile(x, y, zoom)
-
-		filePath := utils.GetFilePathForField(e.Record, e.Collection, app.DataDir(), "satellite")
-		if err := imaging.Save(image, filePath); err != nil {
-			return err
-		}
-		e.Record.Set("satellite", utils.GetFileNameForPath(filePath))
-
-		bboxString := e.Record.GetString("bbox")
-		metersPerPixel := mapbox.MeterPerPixelFromBboxAndZoom(zoom, bboxString)
-		e.Record.Set("metersPerPixel", metersPerPixel)
-
-		if err := app.Save(e.Record); err != nil {
-			return err
-		}
-
-		image = mapbox.DownloadHeightmapTile(x, y, zoom)
-
-		collection, err := app.FindCollectionByNameOrId("heightmaps")
-		if err != nil {
-			return err
-		}
-
-		heightmap := core.NewRecord(collection)
-		if err := app.Save(heightmap); err != nil {
-			return err
-		}
-
-		filePath = utils.GetFilePathForField(heightmap, collection, app.DataDir(), "original")
-		if err := imaging.Save(image, filePath); err != nil {
-			return err
-		}
-		heightmap.Set("original", utils.GetFileNameForPath(filePath))
-		if err := app.Save(heightmap); err != nil {
-			return err
-		}
-
-		e.Record.Set("heightmap", heightmap.Id)
-		if err := app.Save(e.Record); err != nil {
-			return err
-		}
-
-		if err := onHeightmapCreate(heightmap, collection, app); err != nil {
-			return err
-		}
-
-		if err := app.Save(heightmap); err != nil {
-			return err
-		}
-
-		return enqueueTilePopulation(app, e.Record)
+		return ensureTilePopulationJob(app, e.Record.Id, tilePopulationKindLandcover)
 	})
 
 	app.OnRecordCreateRequest("landcovers").BindFunc(func(e *core.RecordRequestEvent) error {
-		if err := e.Next(); err != nil {
-			return err
-		}
-
 		if err := onLandcoverCreate(e.Record, e.Collection, app); err != nil {
 			return err
 		}
 
-		return app.Save(e.Record)
+		return e.Next()
 	})
 
 	app.OnRecordUpdateRequest("landcovers").BindFunc(func(e *core.RecordRequestEvent) error {
-		if err := e.Next(); err != nil {
-			return err
-		}
-
 		if err := onLandcoverUpdate(e.Record, e.Collection, app); err != nil {
 			return err
 		}
 
-		return app.Save(e.Record)
+		return e.Next()
 	})
 
 	app.OnRecordCreateRequest("heightmaps").BindFunc(func(e *core.RecordRequestEvent) error {
-		if err := e.Next(); err != nil {
-			return err
-		}
-
 		if err := onHeightmapCreate(e.Record, e.Collection, app); err != nil {
 			return err
 		}
 
-		return app.Save(e.Record)
+		return e.Next()
 	})
 
-	// Set up reverse proxy
-	targetURL, err := url.Parse("http://localhost:4000")
+	inferenceURLRaw := firstNonEmptyString(
+		os.Getenv("SIMULATION_INFERENCE_URL"),
+		os.Getenv("MARELD_API_URL"),
+		"http://localhost:8000",
+	)
+	inferenceURL, err := url.Parse(inferenceURLRaw)
 	if err != nil {
-		log.Fatal("Invalid target URL")
-	}
-
-	proxy := httputil.NewSingleHostReverseProxy(targetURL)
-
-	proxy.ModifyResponse = func(resp *http.Response) error {
-		// Remove existing CORS header to avoid duplicates
-		resp.Header.Del("Access-Control-Allow-Origin")
-		return nil
+		log.Fatal("Invalid simulation inference URL")
 	}
 
 	httpClient := &http.Client{Timeout: 10 * time.Minute}
@@ -1528,9 +1645,9 @@ func main() {
 
 		// Client-friendly endpoint that:
 		// - resolves the simulation -> tile -> required files
-		// - uploads them to the upstream to get a runner simulation_id
+		// - sends a model-ready run request to MARELD inference
 		// - stores it in simulations.simulationId
-		// - runs the simulation and forwards the response (also cached via file fields)
+		// - forwards the response and caches it via file fields
 		e.Router.GET("/simulation/{id}/run", func(re *core.RequestEvent) error {
 			simRecordId := re.Request.PathValue("id")
 			if simRecordId == "" {
@@ -1562,53 +1679,17 @@ func main() {
 				return re.InternalServerError("Failed to load tile for management plan.", err)
 			}
 
-			landcoverRel := tile.GetString("landcover")
-			if landcoverRel == "" {
-				return re.BadRequestError("Tile is missing landcover relation.", nil)
-			}
-			landcover, err := app.FindRecordById("landcovers", landcoverRel)
-			if err != nil {
-				return re.InternalServerError("Failed to load landcover record.", err)
-			}
-			textureName := firstNonEmptyString(
-				landcover.GetString("color_100"),
-			)
-			if textureName == "" {
-				return re.BadRequestError("landcover is missing texture file.", nil)
-			}
-
-			oceanRel := tile.GetString("oceanData")
-			if oceanRel == "" {
-				return re.BadRequestError("Tile is missing oceanData relation (depth).", nil)
-			}
-
-			ocean, err := app.FindRecordById("oceanData", oceanRel)
-			if err != nil {
-				return re.InternalServerError("Failed to load oceanData record.", err)
-			}
-
-			depthName := ocean.GetString("depth")
-			if depthName == "" {
-				return re.BadRequestError("oceanData is missing depth file.", nil)
-			}
-
-			textureBytes, err := readRecordFileBytes(app, landcover, textureName)
-			if err != nil {
-				return re.InternalServerError("Failed to read landcover texture file.", err)
-			}
-
-			depthBytes, err := readRecordFileBytes(app, ocean, depthName)
-			if err != nil {
-				return re.InternalServerError("Failed to read ocean depth file.", err)
-			}
-
 			normalizedInput, err := buildNormalizedSimulationInput(app, plan, tile)
 			if err != nil {
 				return re.BadRequestError("Management plan cannot be normalized for simulation: "+err.Error(), err)
 			}
+			applyDisabledSimulationTasks(simulation.Get("options"), normalizedInput)
+			if len(normalizedInput.Activities) == 0 {
+				return re.BadRequestError("Management plan has no enabled activities for simulation.", nil)
+			}
+			applySimulationActivityImpactOverrides(simulation.Get("options"), normalizedInput)
 
-			optionsJSON, err := mergeSimulationOptions(simulation.Get("options"), normalizedInput)
-			if err != nil {
+			if _, err := mergeSimulationOptions(simulation.Get("options"), normalizedInput); err != nil {
 				return re.InternalServerError("Failed to encode simulation input.", err)
 			}
 			runRawQuery := applySimulationTimelineDefaults(re.Request.URL.RawQuery, normalizedInput)
@@ -1622,145 +1703,185 @@ func main() {
 				return re.InternalServerError("Failed to store normalized simulation input.", err)
 			}
 
-			if simulationMockEnabled() {
-				simulationID := newMockSimulationID(simRecordId)
-				simulation.Set("simulationId", simulationID)
-				if err := app.Save(simulation); err != nil {
-					return re.InternalServerError("Failed to update simulation record with mock simulationId.", err)
-				}
+			failBadRequest := func(message string, err error) error {
+				markSimulationFailed(app, simulation)
+				return re.BadRequestError(message, err)
+			}
+			failInternal := func(message string, err error) error {
+				markSimulationFailed(app, simulation)
+				return re.InternalServerError(message, err)
+			}
+			failBlob := func(status int, contentType string, body []byte) error {
+				markSimulationFailed(app, simulation)
+				return re.Blob(status, contentType, body)
+			}
+			tileName := firstNonEmptyString(tile.GetString("name"), tile.Id)
 
-				if err := handleSimulateRunAndCache(app, httpClient, targetURL, re, simulationID); err != nil {
-					simulation.Set("status", "failed")
-					_ = app.Save(simulation)
-					return err
-				}
-				completedSimulation, err := app.FindRecordById("simulations", simRecordId)
-				if err != nil {
-					return re.InternalServerError("Failed to reload completed simulation record.", err)
-				}
-				completedSimulation.Set("status", "completed")
-				return app.Save(completedSimulation)
+			landcoverRel := tile.GetString("landcover")
+			if landcoverRel == "" {
+				return failBadRequest(
+					fmt.Sprintf("Tile %q is missing generated landcover. Generate tile assets before running inference.", tileName),
+					nil,
+				)
+			}
+			landcover, err := app.FindRecordById("landcovers", landcoverRel)
+			if err != nil {
+				return failInternal("Failed to load landcover record.", err)
+			}
+			textureName := firstNonEmptyString(
+				landcover.GetString("color_100"),
+			)
+			if textureName == "" {
+				return failBadRequest(
+					fmt.Sprintf("Generated landcover for tile %q is missing color_100 texture file.", tileName),
+					nil,
+				)
 			}
 
-			uploadBody, uploadStatus, uploadContentType, err := uploadSimulationMap(
-				re,
+			oceanRel := tile.GetString("oceanData")
+			if oceanRel == "" {
+				return failBadRequest(
+					fmt.Sprintf("Tile %q is missing generated ocean depth data. Generate tile assets before running inference.", tileName),
+					nil,
+				)
+			}
+
+			ocean, err := app.FindRecordById("oceanData", oceanRel)
+			if err != nil {
+				return failInternal("Failed to load oceanData record.", err)
+			}
+
+			depthName := ocean.GetString("depth")
+			if depthName == "" {
+				return failBadRequest(
+					fmt.Sprintf("Generated ocean data for tile %q is missing depth file.", tileName),
+					nil,
+				)
+			}
+
+			textureBytes, err := readRecordFileBytes(app, landcover, textureName)
+			if err != nil {
+				return failInternal("Failed to read landcover texture file.", err)
+			}
+			textureBytes, err = landcoverTextureForInference(textureBytes)
+			if err != nil {
+				return failBadRequest("landcover texture cannot be converted to inference water/land mask.", err)
+			}
+
+			depthBytes, err := readRecordFileBytes(app, ocean, depthName)
+			if err != nil {
+				return failInternal("Failed to read ocean depth file.", err)
+			}
+
+			format := strings.ToLower(firstNonEmptyString(re.Request.URL.Query().Get("format"), "base64"))
+			if format != "base64" {
+				return failBadRequest("MARELD inference currently supports only format=base64 through the UI bridge.", nil)
+			}
+
+			textureWidth, textureHeight, err := imageDimensions(textureBytes)
+			if err != nil {
+				return failBadRequest("landcover texture is not a readable image.", err)
+			}
+			depthWidth, depthHeight, err := imageDimensions(depthBytes)
+			if err != nil {
+				return failBadRequest("ocean depth file is not a readable image.", err)
+			}
+			if textureWidth != depthWidth || textureHeight != depthHeight {
+				return failBadRequest("landcover texture and ocean depth images must have matching dimensions.", nil)
+			}
+
+			impactNoiseBytes, err := impactNoisePNGForInference(normalizedInput, textureWidth, textureHeight)
+			if err != nil {
+				return failInternal("Failed to build noise_impact raster.", err)
+			}
+
+			models, modelsBody, modelsStatus, modelsContentType, err := fetchInferenceModels(
+				re.Request,
 				httpClient,
-				targetURL,
-				textureBytes,
-				depthBytes,
-				optionsJSON,
-				runRawQuery,
+				inferenceURL,
 			)
 			if err != nil {
-				simulation.Set("status", "failed")
-				_ = app.Save(simulation)
-				return re.InternalServerError("Failed to upload map to simulation upstream.", err)
+				return failInternal("Failed to fetch inference models.", err)
 			}
-			if uploadStatus < 200 || uploadStatus > 299 {
-				simulation.Set("status", "failed")
-				_ = app.Save(simulation)
-				return re.Blob(uploadStatus, uploadContentType, uploadBody)
+			if modelsStatus < 200 || modelsStatus > 299 {
+				return failBlob(modelsStatus, modelsContentType, modelsBody)
 			}
 
-			var parsed simulationUploadResponse
-			if err := json.Unmarshal(uploadBody, &parsed); err != nil || parsed.ID == "" {
-				simulation.Set("status", "failed")
-				_ = app.Save(simulation)
-				return re.InternalServerError("Invalid simulation upstream upload response.", err)
+			model, err := selectInferenceModel(models, re.Request.URL.Query(), simulation.Get("options"))
+			if err != nil {
+				return failInternal("Failed to select inference model.", err)
+			}
+			if len(model.Species) == 0 {
+				return failInternal("Selected inference model does not define output species.", nil)
 			}
 
-			// Store the upstream simulation_id; result files were cleared with the input snapshot.
-			simulation.Set("simulationId", parsed.ID)
+			runID := inferenceRunID(simRecordId)
+			runRequest := buildInferenceRunRequest(
+				runID,
+				model,
+				normalizedInput,
+				re.Request.URL.Query(),
+				simulation.Get("options"),
+				textureWidth,
+				textureHeight,
+			)
+
+			resultBody, resultStatus, resultContentType, returnedRunID, err := runMareldInference(
+				re,
+				httpClient,
+				inferenceURL,
+				runRequest,
+				textureBytes,
+				depthBytes,
+				impactNoiseBytes,
+			)
+			if err != nil {
+				return failInternal("Failed to run MARELD inference.", err)
+			}
+			if resultStatus < 200 || resultStatus > 299 {
+				return failBlob(resultStatus, resultContentType, resultBody)
+			}
+
+			if returnedRunID == "" {
+				returnedRunID = runID
+			}
+			resultFile, err := filesystem.NewFileFromBytes(resultBody, "simulation_result.json")
+			if err != nil {
+				return failInternal("Failed to create cached simulation result file.", err)
+			}
+
+			simulation.Set("simulationId", returnedRunID)
+			simulation.Set("resultJson", resultFile)
+			simulation.Set("status", "completed")
 			if err := app.Save(simulation); err != nil {
-				return re.InternalServerError("Failed to update simulation record with simulationId.", err)
+				return failInternal("Failed to cache completed simulation result.", err)
 			}
 
-			if err := handleSimulateRunAndCache(app, httpClient, targetURL, re, parsed.ID); err != nil {
-				simulation.Set("status", "failed")
-				_ = app.Save(simulation)
-				return err
-			}
-			completedSimulation, err := app.FindRecordById("simulations", simRecordId)
-			if err != nil {
-				return re.InternalServerError("Failed to reload completed simulation record.", err)
-			}
-			completedSimulation.Set("status", "completed")
-			return app.Save(completedSimulation)
-		})
-
-		e.Router.POST("/simulate/upload", func(re *core.RequestEvent) error {
-			if simulationMockEnabled() {
-				body, err := json.Marshal(simulationUploadResponse{
-					ID: newMockSimulationID("upload"),
-				})
-				if err != nil {
-					return re.InternalServerError("Failed to build mock upload response.", err)
-				}
-				return re.Blob(http.StatusOK, "application/json", body)
-			}
-
-			upURL := *targetURL
-			upURL.Path = "/simulate/upload"
-			upURL.RawQuery = re.Request.URL.RawQuery
-
-			upReq, err := http.NewRequestWithContext(re.Request.Context(), http.MethodPost, upURL.String(), re.Request.Body)
-			if err != nil {
-				return re.InternalServerError("Failed to build upstream request.", err)
-			}
-			upReq.Header = re.Request.Header.Clone()
-			upReq.Header.Del("Accept-Encoding") // let net/http handle decompression
-			upReq.Host = targetURL.Host
-
-			resp, err := httpClient.Do(upReq)
-			if err != nil {
-				return re.InternalServerError("Failed to contact simulation upstream.", err)
-			}
-			defer resp.Body.Close()
-
-			body, err := io.ReadAll(resp.Body)
-			if err != nil {
-				return re.InternalServerError("Failed to read simulation upstream response.", err)
-			}
-
-			// best-effort: ensure a simulations record exists
-			if resp.StatusCode >= 200 && resp.StatusCode <= 299 {
-				var parsed simulationUploadResponse
-				if err := json.Unmarshal(body, &parsed); err == nil && parsed.ID != "" {
-					if _, err := findOrCreateSimulationRecord(app, parsed.ID); err != nil {
-						log.Printf("simulate/upload: failed to upsert simulations record for %q: %v", parsed.ID, err)
-					}
-				}
-			}
-
-			contentType := resp.Header.Get("Content-Type")
-			if contentType == "" {
-				contentType = "application/json"
-			}
-
-			return re.Blob(resp.StatusCode, contentType, body)
+			return re.Blob(http.StatusOK, resultContentType, resultBody)
 		})
 
 		e.Router.GET("/simulate/agents", func(re *core.RequestEvent) error {
-			if simulationMockEnabled() {
-				body, err := json.Marshal(mockSimulationAgents())
-				if err != nil {
-					return re.InternalServerError("Failed to build mock agents response.", err)
-				}
-				return re.Blob(http.StatusOK, "application/json", body)
+			models, body, status, contentType, err := fetchInferenceModels(
+				re.Request,
+				httpClient,
+				inferenceURL,
+			)
+			if err != nil {
+				return re.InternalServerError("Failed to fetch inference models.", err)
+			}
+			if status < 200 || status > 299 {
+				return re.Blob(status, contentType, body)
 			}
 
-			proxy.ServeHTTP(re.Response, re.Request)
-			return nil
+			body, err = json.Marshal(inferenceModelsToAgents(models))
+			if err != nil {
+				return re.InternalServerError("Failed to map inference models.", err)
+			}
+			return re.Blob(http.StatusOK, "application/json", body)
 		})
 
-		e.Router.GET("/simulate/{simulationId}", func(re *core.RequestEvent) error {
-			return handleSimulateRunAndCache(app, httpClient, targetURL, re, re.Request.PathValue("simulationId"))
-		})
-
-		// proxy all other /simulate/* GET routes
 		e.Router.GET("/simulate/{path...}", func(re *core.RequestEvent) error {
-			proxy.ServeHTTP(re.Response, re.Request)
-			return nil
+			return re.NotFoundError("Simulation route not found.", nil)
 		})
 
 		return e.Next()

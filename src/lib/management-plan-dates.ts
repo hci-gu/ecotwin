@@ -1,4 +1,5 @@
 import type { Task, TaskData } from "@/state/ecotwin-types"
+import { t } from "@/lib/translations"
 
 export const DEFAULT_TICK_DURATION_DAYS = 1
 export const MAX_PLAYBACK_FRAMES = 96
@@ -29,7 +30,7 @@ export function parsePlanDate(value?: string | null) {
 }
 
 export function formatPlanDate(value?: string | null) {
-  return value?.substring(0, 10) || "Unknown date"
+  return value?.substring(0, 10) || t("common.unknownDate")
 }
 
 export function daysBetween(start: Date, end: Date) {

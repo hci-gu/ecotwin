@@ -43,6 +43,7 @@ import {
   tileAreaKm2,
   type DetailRow,
 } from "@/lib/tile-metrics"
+import { t } from "@/lib/translations"
 
 function isPreviewableImage(filename: string) {
   const lower = filename.toLowerCase()
@@ -151,28 +152,28 @@ export function MapPage() {
 
     return [
       formatArea(tileAreaKm2(selectedTile))
-        ? { label: "Area", value: formatArea(tileAreaKm2(selectedTile))! }
+        ? { label: t("common.area"), value: formatArea(tileAreaKm2(selectedTile))! }
         : null,
       formatMetersPerPixel(selectedTile.metersPerPixel)
         ? {
-            label: "Resolution",
+            label: t("common.resolution"),
             value: formatMetersPerPixel(selectedTile.metersPerPixel)!,
           }
         : null,
       {
-        label: "Landcover",
+        label: t("common.landcover"),
         value:
           formatAssetStatus(selectedTile.landcoverStatus, Boolean(selectedTile.landcover)) ??
-          "Not linked",
+          t("common.notLinked"),
       },
       {
-        label: "Ocean data",
+        label: t("common.oceanData"),
         value:
           formatAssetStatus(selectedTile.oceanDataStatus, Boolean(selectedTile.oceanData)) ??
-          "Not linked",
+          t("common.notLinked"),
       },
-      { label: "Management plans", value: String(selectedTilePlanIds.size) },
-      { label: "Simulations", value: String(selectedTileSimulationCount) },
+      { label: t("common.managementPlans"), value: String(selectedTilePlanIds.size) },
+      { label: t("common.simulations"), value: String(selectedTileSimulationCount) },
     ].filter((row): row is DetailRow => Boolean(row))
   }, [selectedTile, selectedTilePlanIds.size, selectedTileSimulationCount])
 
@@ -330,7 +331,7 @@ export function MapPage() {
                 className="text-xs font-medium text-zinc-500 hover:text-zinc-900 flex items-center gap-1 cursor-pointer"
               >
                 <HugeiconsIcon icon={ArrowDown01Icon} size={14} className="-rotate-90" />
-                Close details
+                {t("tiles.closeDetails")}
               </button>
               {selectedTile && (
                 <button
@@ -338,16 +339,16 @@ export function MapPage() {
                   onClick={() => navigate(`/tile/${selectedTile.id}`)}
                   className="inline-flex cursor-pointer items-center rounded-md bg-zinc-900 px-3 py-1.5 text-[11px] font-medium text-white shadow-sm hover:bg-zinc-800 transition-colors"
                 >
-                  Configure tile
+                  {t("tiles.configureTile")}
                 </button>
               )}
             </div>
 
             <TileDetails 
-              name={selectedTile?.name || "Untitled tile"} 
+              name={selectedTile?.name || t("common.untitledTile")} 
               status={tileStatus.label}
               statusTone={tileStatus.tone}
-              createdDate={selectedTile?.created?.substring(0, 10) || "Unknown date"}
+              createdDate={selectedTile?.created?.substring(0, 10) || t("common.unknownDate")}
               simulationInfoContent={<DetailRows rows={selectedTileDetailRows} />}
               landcoverContent={
                 <div>
@@ -362,7 +363,7 @@ export function MapPage() {
                         selectedLandcover.texture ? (
                           <img
                             src={fileUrl(selectedLandcover, selectedLandcover.color_100 || selectedLandcover.color || selectedLandcover.texture_100 || selectedLandcover.texture) ?? ""}
-                            alt="Landcover"
+                            alt={t("common.landcover")}
                             className="h-full w-full object-cover"
                             style={{ imageRendering: "pixelated" }}
                             onMouseEnter={() => {
@@ -374,12 +375,12 @@ export function MapPage() {
                             onMouseLeave={clearOverlay}
                           />
                         ) : (
-                          <div className="grid h-full place-items-center text-xs text-zinc-400">No image</div>
+                          <div className="grid h-full place-items-center text-xs text-zinc-400">{t("common.noImage")}</div>
                         )}
                       </div>
                       {coverageEntries && (
                         <div className="space-y-2">
-                          <div className="text-[10px] font-bold text-zinc-400 uppercase tracking-wider">Coverage</div>
+                          <div className="text-[10px] font-bold text-zinc-400 uppercase tracking-wider">{t("common.coverage")}</div>
                           <div className="space-y-1.5">
                             {coverageEntries.map((entry) => (
                               <div key={entry.key} className="flex items-center justify-between gap-2">
@@ -394,7 +395,7 @@ export function MapPage() {
                       )}
                     </div>
                   ) : (
-                    <div className="text-xs text-zinc-500 animate-pulse">Loading landcover...</div>
+                    <div className="text-xs text-zinc-500 animate-pulse">{t("common.loadingLandcover")}</div>
                   )}
                 </div>
               }
@@ -428,7 +429,7 @@ export function MapPage() {
                                   onMouseLeave={clearOverlay}
                                 />
                               ) : (
-                                <div className="grid h-full place-items-center text-[9px] text-zinc-400">FILE</div>
+                                <div className="grid h-full place-items-center text-[9px] text-zinc-400">{t("common.file")}</div>
                               )}
                             </div>
                           </div>
@@ -436,7 +437,7 @@ export function MapPage() {
                       })}
                     </div>
                   ) : (
-                    <div className="text-xs text-zinc-500 animate-pulse">Loading ocean data...</div>
+                    <div className="text-xs text-zinc-500 animate-pulse">{t("common.loadingOceanData")}</div>
                   )}
                 </div>
               }
@@ -457,28 +458,28 @@ export function MapPage() {
                 className="text-xs font-medium text-zinc-500 hover:text-zinc-900 flex items-center gap-1 cursor-pointer"
               >
                 <HugeiconsIcon icon={ArrowDown01Icon} size={14} className="-rotate-90" />
-                Close preview
+                {t("tiles.closePreview")}
               </button>
             </div>
 
             <div className="rounded-xl border border-zinc-200 bg-white/70 p-4 shadow-sm">
               <div className="text-[10px] font-bold uppercase tracking-wider text-zinc-400">
-                New location
+                {t("tiles.newLocation")}
               </div>
               <div className="mt-2 text-lg font-semibold text-zinc-950">
                 {tileCreationSelectedCandidate
                   ? existingTileForCandidate
-                  ? existingTileForCandidate.name || "Existing location"
+                  ? existingTileForCandidate.name || t("tiles.existingLocation")
                   : `Location ${tileCreationSelectedCandidate.zoom}/${tileCreationSelectedCandidate.x}/${tileCreationSelectedCandidate.y}`
-                  : "Choose location size"}
+                  : t("tiles.selectLocationSize")}
               </div>
               <div className="mt-1 text-xs text-zinc-500">
-                Higher zoom means a smaller location tile. Click on the map to place the current size.
+                {t("tiles.tileCreationHelp")}
               </div>
 
               <div className="mt-5 space-y-3 text-sm text-zinc-700">
                 <div className="flex items-center justify-between gap-4">
-                  <span>Zoom level</span>
+                  <span>{t("common.zoomLevel")}</span>
                   <Input
                     type="number"
                     min={0}
@@ -492,20 +493,20 @@ export function MapPage() {
                 {tileCreationSelectedCandidate ? (
                   <>
                     <div className="flex items-center justify-between gap-4">
-                      <span>X / Y</span>
+                      <span>{t("common.xY")}</span>
                       <span className="font-medium text-zinc-950">
                         {tileCreationSelectedCandidate.x} / {tileCreationSelectedCandidate.y}
                       </span>
                     </div>
                     <div className="flex items-start justify-between gap-4">
-                      <span>Center</span>
+                      <span>{t("common.center")}</span>
                       <span className="text-right font-medium text-zinc-950">
                         {tileCreationSelectedCandidate.center.lat.toFixed(4)}°,{" "}
                         {tileCreationSelectedCandidate.center.lng.toFixed(4)}°
                       </span>
                     </div>
                     <div className="flex items-start justify-between gap-4">
-                      <span>BBox</span>
+                      <span>{t("common.bbox")}</span>
                       <span className="max-w-[10rem] break-all text-right font-mono text-[11px] text-zinc-600">
                         {tileCreationSelectedCandidate.bbox}
                       </span>
@@ -513,14 +514,14 @@ export function MapPage() {
                   </>
                 ) : (
                   <div className="rounded-lg border border-dashed border-zinc-300 bg-zinc-50 px-3 py-3 text-xs text-zinc-500">
-                    No location selected yet. Set a zoom level, then click the map to preview the tile.
+                    {t("tiles.noLocationSelected")}
                   </div>
                 )}
               </div>
 
               {tileCreationSelectedCandidate && existingTileForCandidate ? (
                 <div className="mt-5 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-800">
-                  This location already exists.
+                  {t("tiles.thisLocationExists")}
                 </div>
               ) : null}
 
@@ -532,12 +533,12 @@ export function MapPage() {
                   className="flex-1 rounded-md bg-zinc-900 px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-zinc-800 disabled:opacity-60"
                 >
                   {!tileCreationSelectedCandidate
-                    ? "Select location on map"
+                    ? t("tiles.selectLocationOnMap")
                     : existingTileForCandidate
-                    ? "Open existing location"
+                    ? t("tiles.openExistingLocation")
                     : isCreatingTile
-                      ? "Creating..."
-                      : "Create location"}
+                      ? t("tiles.creating")
+                      : t("tiles.createLocation")}
                 </button>
                 <button
                   type="button"
@@ -545,7 +546,7 @@ export function MapPage() {
                   disabled={!tileCreationSelectedCandidate}
                   className="rounded-md border border-zinc-300 bg-white px-4 py-2 text-sm font-medium text-zinc-700 transition-colors hover:bg-zinc-50"
                 >
-                  Pick another
+                  {t("tiles.pickAnother")}
                 </button>
               </div>
             </div>

@@ -31,6 +31,7 @@ import {
   toActivityAreaGeometry,
 } from "@/lib/activity-area"
 import { getManagementPlanDateRange } from "@/lib/management-plan-dates"
+import { t, tc } from "@/lib/translations"
 import { cn } from "@/lib/utils"
 import {
   createManagementPlan,
@@ -245,15 +246,15 @@ function isConstantTask(task?: Task) {
 }
 
 function formatTaskTiming(task: Task) {
-  if (isConstantTask(task)) return "Constant"
+  if (isConstantTask(task)) return t("common.constant")
   return `${formatDate(task.start)} to ${formatDate(task.end)}`
 }
 
 function planLocationName(plan?: ManagementPlan | null) {
   const expandedTile = plan?.expand?.tile
   if (expandedTile?.name?.trim()) return expandedTile.name.trim()
-  if (plan?.tile) return "Unnamed location"
-  return "No location"
+  if (plan?.tile) return t("common.untitledLocation")
+  return t("managementPlans.noLocation")
 }
 
 function extractActivityAreaPoints(value: unknown): ActivityAreaPoint[] {
@@ -281,6 +282,47 @@ function extractActivityAreaPoints(value: unknown): ActivityAreaPoint[] {
   }
 
   return normalized
+}
+
+function extractTaskActivityAreas(data?: TaskData): ActivityAreaPoint[][] {
+  const areas = Array.isArray(data?.areas)
+    ? data.areas
+        .map((areaItem) => extractActivityAreaPoints(areaItem?.area))
+        .filter((points) => points.length >= 3)
+    : []
+
+  if (areas.length) return areas
+
+  const legacyArea = extractActivityAreaPoints(data?.area)
+  return legacyArea.length >= 3 ? [legacyArea] : []
+}
+
+function buildActivityAreaEntries(areas: ActivityAreaPoint[][]) {
+  return areas
+    .map((points) => {
+      const area = toActivityAreaGeometry(points)
+      const areaSummary = summarizeActivityArea(points)
+      if (!area || !areaSummary) return null
+      return { area, areaSummary }
+    })
+    .filter((entry): entry is NonNullable<typeof entry> => Boolean(entry))
+}
+
+function summarizeActivityAreas(areas: ActivityAreaPoint[][]) {
+  const summaries = areas
+    .map((points) => summarizeActivityArea(points))
+    .filter((summary): summary is NonNullable<typeof summary> => Boolean(summary))
+
+  if (!summaries.length) return null
+
+  const first = summaries[0]
+  const totalAreaKm2 = summaries.reduce((sum, summary) => sum + summary.areaKm2, 0)
+
+  return {
+    ...first,
+    areaKm2: totalAreaKm2,
+    areaCount: summaries.length,
+  }
 }
 
 function createActivityFormFromTask(task: Task): CreateActivityFormState {
@@ -315,7 +357,7 @@ function createActivityFormFromTask(task: Task): CreateActivityFormState {
     targetScope:
       data?.targetScope === "wholeTile" || data?.targetScope === "polygon"
         ? data.targetScope
-        : data?.area
+        : data?.area || (Array.isArray(data?.areas) && data.areas.length)
           ? "polygon"
           : "wholeTile",
     speciesEffortMultipliers: multipliers,
@@ -378,8 +420,8 @@ function pickTaskDates(tasks: Task[], fallbackCreated?: string) {
 
   if (!starts.length && !ends.length && tasks.some((task) => isConstantTask(task))) {
     return {
-      startDate: "Constant",
-      endDate: "Constant",
+      startDate: t("common.constant"),
+      endDate: t("common.constant"),
     }
   }
 
@@ -397,14 +439,14 @@ function toPlanRow(plan: ManagementPlan): PlanRow {
 
   return {
     id: plan.id,
-    name: plan.name?.trim() || "Untitled plan",
+    name: plan.name?.trim() || t("common.untitledPlan"),
     locationName: planLocationName(plan),
     activityCount: tasks.length,
     startDate,
     endDate,
     costLabel: formatCurrency(totalCost),
     revenueLabel: formatCurrency(totalRevenue),
-    statusLabel: tasks.length ? `${tasks.length} activit${tasks.length === 1 ? "y" : "ies"}` : "Empty plan",
+    statusLabel: tasks.length ? tc("managementPlans.activityCount", "managementPlans.activityCountPlural", tasks.length) : t("managementPlans.emptyPlan"),
   }
 }
 
@@ -502,7 +544,7 @@ function renderActivitySummary(task: Task) {
           .map((species) => {
             const value = data.speciesEffortMultipliers?.[species.id]
             return typeof value === "number" && Number.isFinite(value)
-              ? `${species.label}: ${value}x effort`
+              ? t("managementPlans.effortMultiplier", { species: species.label, value })
               : null
           })
           .filter((value): value is string => Boolean(value))
@@ -511,24 +553,24 @@ function renderActivitySummary(task: Task) {
     task.type === "construction" && data?.construction
       ? [
           data.construction.category
-            ? `Category: ${getConstructionCategoryLabel(data.construction.category)}`
+            ? `${t("managementPlans.category")}: ${getConstructionCategoryLabel(data.construction.category)}`
             : null,
           typeof data.construction.intensity === "number"
-            ? `Intensity: ${data.construction.intensity}`
+            ? `${t("managementPlans.intensity")}: ${data.construction.intensity}`
             : null,
-          data.construction.description ? `Construction: ${data.construction.description}` : null,
+          data.construction.description ? t("managementPlans.constructionPrefix", { description: data.construction.description }) : null,
         ].filter((value): value is string => Boolean(value))
       : []
   const lines = [
-    `Type: ${getActivityTypeLabel(task.type)}`,
-    `Timing: ${formatTaskTiming(task)}`,
-    data?.objective ? `Target: ${data.objective}` : null,
-    data?.description ? `Details: ${data.description}` : null,
-    data?.targetScope === "wholeTile" ? "Area: Whole tile" : null,
+    t("managementPlans.typePrefix", { type: getActivityTypeLabel(task.type) }),
+    t("managementPlans.timingPrefix", { timing: formatTaskTiming(task) }),
+    data?.objective ? t("managementPlans.targetPrefix", { target: data.objective }) : null,
+    data?.description ? t("managementPlans.detailsPrefix", { details: data.description }) : null,
+    data?.targetScope === "wholeTile" ? `${t("common.area")}: ${t("common.wholeTile")}` : null,
     ...multiplierLines,
     ...constructionLines,
-    typeof data?.cost === "number" ? `Cost: ${formatCurrency(data.cost)} SEK` : null,
-    typeof data?.revenue === "number" ? `Revenue: ${formatCurrency(data.revenue)} SEK` : null,
+    typeof data?.cost === "number" ? t("managementPlans.costPrefix", { cost: formatCurrency(data.cost) }) : null,
+    typeof data?.revenue === "number" ? t("managementPlans.revenuePrefix", { revenue: formatCurrency(data.revenue) }) : null,
   ].filter((value): value is string => Boolean(value))
 
   return lines.slice(0, 7)
@@ -536,7 +578,7 @@ function renderActivitySummary(task: Task) {
 
 function formatActivityTarget(task: Task) {
   const objective = taskData(task)?.objective
-  return objective ? `Target: ${objective}` : null
+  return objective ? t("managementPlans.targetPrefix", { target: objective }) : null
 }
 
 export function ManagementPlansPage() {
@@ -577,6 +619,7 @@ export function ManagementPlansPage() {
   const [createActivityError, setCreateActivityError] = useState<string | null>(null)
   const [isCreatingActivity, setIsCreatingActivity] = useState(false)
   const [activityAreaStepMode, setActivityAreaStepMode] = useState<"review" | "draw">("draw")
+  const [completedActivityAreas, setCompletedActivityAreas] = useState<ActivityAreaPoint[][]>([])
   const [timelineRange, setTimelineRange] = useState(() => {
     const base = startOfMonth(new Date())
     return {
@@ -620,8 +663,8 @@ export function ManagementPlansPage() {
   const locationOptions = useMemo(
     () =>
       [...(tiles?.items ?? [])].sort((left, right) =>
-        (left.name?.trim() || "Untitled location").localeCompare(
-          right.name?.trim() || "Untitled location"
+        (left.name?.trim() || t("common.untitledLocation")).localeCompare(
+          right.name?.trim() || t("common.untitledLocation")
         )
       ),
     [tiles?.items]
@@ -639,8 +682,18 @@ export function ManagementPlansPage() {
     () => `repeat(${timelineMonths.length}, minmax(${TIMELINE_MONTH_WIDTH}px, ${TIMELINE_MONTH_WIDTH}px))`,
     [timelineMonths.length]
   )
-  const selectedAreaSummary = useMemo(() => summarizeActivityArea(areaPoints), [areaPoints])
   const hasValidSelectedArea = useMemo(() => isValidActivityArea(areaPoints), [areaPoints])
+  const allSelectedActivityAreas = useMemo(() => {
+    const areas = [...completedActivityAreas]
+    if (hasValidSelectedArea) areas.push(areaPoints)
+    return areas
+  }, [areaPoints, completedActivityAreas, hasValidSelectedArea])
+  const selectedAreaSummary = useMemo(() => summarizeActivityArea(areaPoints), [areaPoints])
+  const selectedAreasSummary = useMemo(
+    () => summarizeActivityAreas(allSelectedActivityAreas),
+    [allSelectedActivityAreas]
+  )
+  const hasAnyValidSelectedArea = allSelectedActivityAreas.length > 0
   const isSelectedAreaClosed = useMemo(() => isActivityAreaClosed(areaPoints), [areaPoints])
   const editingTask = useMemo(
     () => activeTasks.find((task) => task.id === editingTaskId) ?? null,
@@ -745,11 +798,11 @@ export function ManagementPlansPage() {
   async function handleCreatePlan() {
     const name = createPlanForm.name.trim()
     if (!name) {
-      setCreatePlanError("Enter a management plan name before continuing.")
+      setCreatePlanError(t("managementPlans.enterManagementPlanName"))
       return
     }
     if (!createPlanForm.tileId) {
-      setCreatePlanError("Choose a location for this management plan before continuing.")
+      setCreatePlanError(t("managementPlans.choosePlanLocation"))
       return
     }
 
@@ -762,7 +815,7 @@ export function ManagementPlansPage() {
       handleCreatePlanModalOpenChange(false)
       navigate(`/management-plans/${plan.id}`)
     } catch (err) {
-      setCreatePlanError(`Failed to create management plan: ${toMessage(err)}`)
+      setCreatePlanError(t("managementPlans.failedToCreatePlan", { message: toMessage(err) }))
     } finally {
       setIsCreatingPlan(false)
     }
@@ -776,6 +829,7 @@ export function ManagementPlansPage() {
     setCreateActivityError(null)
     setIsCreatingActivity(false)
     setAreaPoints([])
+    setCompletedActivityAreas([])
     setAreaHoverPoint(null)
     setAreaDrawingActive(false)
   }
@@ -786,7 +840,8 @@ export function ManagementPlansPage() {
   }
 
   function openEditActivity(task: Task) {
-    const existingAreaPoints = extractActivityAreaPoints(taskData(task)?.area)
+    const existingAreas = extractTaskActivityAreas(taskData(task))
+    const [existingAreaPoints = [], ...otherAreas] = existingAreas
     setEditingTaskId(task.id)
     setCreateActivityForm(createActivityFormFromTask(task))
     setCreateActivityStep(1)
@@ -794,6 +849,7 @@ export function ManagementPlansPage() {
     setCreateActivityError(null)
     setIsCreatingActivity(false)
     setAreaPoints(existingAreaPoints)
+    setCompletedActivityAreas(otherAreas)
     setAreaHoverPoint(null)
     setCreateActivityModalOpen(true)
   }
@@ -807,22 +863,22 @@ export function ManagementPlansPage() {
 
   function handleActivityStepOneNext() {
     if (!createActivityForm.activityType) {
-      setCreateActivityError("Choose an activity type before continuing.")
+      setCreateActivityError(t("managementPlans.chooseActivityType"))
       return
     }
 
     if (!createActivityForm.activityName.trim()) {
-      setCreateActivityError("Enter an activity name before continuing.")
+      setCreateActivityError(t("managementPlans.enterActivityName"))
       return
     }
 
     if (createActivityForm.timingMode === "scheduled") {
       if (!createActivityForm.startDate || !createActivityForm.endDate) {
-        setCreateActivityError("Set a start and end date, or change timing to Constant.")
+        setCreateActivityError(t("managementPlans.setStartAndEndDate"))
         return
       }
       if (createActivityForm.endDate < createActivityForm.startDate) {
-        setCreateActivityError("Set an end date that is on or after the start date.")
+        setCreateActivityError(t("managementPlans.setEndDateAfterStart"))
         return
       }
     }
@@ -830,18 +886,21 @@ export function ManagementPlansPage() {
     if (createActivityForm.targetScope === "wholeTile") {
       setCreateActivityError(null)
       setAreaPoints([])
+      setCompletedActivityAreas([])
       setAreaHoverPoint(null)
       setActivityAreaStepMode("draw")
       setCreateActivityStep(3)
       return
     }
 
-    const existingAreaPoints = editingTask ? extractActivityAreaPoints(taskData(editingTask)?.area) : []
+    const existingAreas = editingTask ? extractTaskActivityAreas(taskData(editingTask)) : []
+    const [existingAreaPoints = [], ...otherAreas] = existingAreas
     setCreateActivityError(null)
     setAreaPoints((prev) => {
       if (prev.length) return prev
       return existingAreaPoints
     })
+    setCompletedActivityAreas((prev) => (prev.length ? prev : otherAreas))
     setAreaHoverPoint(null)
     setActivityAreaStepMode(existingAreaPoints.length >= 3 ? "review" : "draw")
     setCreateActivityStep(2)
@@ -861,6 +920,7 @@ export function ManagementPlansPage() {
     setCreateActivityError(null)
     setActivityAreaStepMode("draw")
     setAreaPoints([])
+    setCompletedActivityAreas([])
     setAreaHoverPoint(null)
   }
 
@@ -871,8 +931,8 @@ export function ManagementPlansPage() {
   }
 
   function handleActivityStepTwoNext() {
-    if (!hasValidSelectedArea) {
-      setCreateActivityError("Draw an activity area on the map before continuing.")
+    if (!hasAnyValidSelectedArea) {
+      setCreateActivityError(t("managementPlans.drawActivityAreaBeforeContinue"))
       return
     }
 
@@ -882,31 +942,44 @@ export function ManagementPlansPage() {
     setCreateActivityStep(3)
   }
 
+  function handleAddAnotherActivityArea() {
+    if (!hasValidSelectedArea) {
+      setCreateActivityError(t("managementPlans.drawActivityAreaBeforeAdd"))
+      return
+    }
+
+    setCompletedActivityAreas((prev) => [...prev, closeActivityAreaPoints(areaPoints)])
+    setAreaPoints([])
+    setAreaHoverPoint(null)
+    setActivityAreaStepMode("draw")
+    setCreateActivityError(null)
+  }
+
   async function handleSubmitActivity() {
     if (!activePlan) {
-      setCreateActivityError("No active management plan selected.")
+      setCreateActivityError(t("managementPlans.noActivePlan"))
       return
     }
 
     const activityName = createActivityForm.activityName.trim()
     if (!createActivityForm.activityType) {
-      setCreateActivityError("Choose an activity type before creating the activity.")
+      setCreateActivityError(t("managementPlans.chooseActivityTypeBeforeCreate"))
       setCreateActivityStep(1)
       return
     }
     if (!activityName) {
-      setCreateActivityError("Enter an activity name before creating the activity.")
+      setCreateActivityError(t("managementPlans.enterActivityNameBeforeCreate"))
       setCreateActivityStep(1)
       return
     }
     if (createActivityForm.timingMode === "scheduled") {
       if (!createActivityForm.startDate || !createActivityForm.endDate) {
-        setCreateActivityError("Set a start and end date, or change timing to Constant.")
+        setCreateActivityError(t("managementPlans.setStartAndEndDate"))
         setCreateActivityStep(1)
         return
       }
       if (createActivityForm.endDate < createActivityForm.startDate) {
-        setCreateActivityError("Set an end date that is on or after the start date.")
+        setCreateActivityError(t("managementPlans.setEndDateAfterStart"))
         setCreateActivityStep(1)
         return
       }
@@ -919,17 +992,17 @@ export function ManagementPlansPage() {
     }
 
     if (createActivityForm.targetScope === "polygon") {
-      const activityArea = toActivityAreaGeometry(areaPoints)
-      const activityAreaSummary = summarizeActivityArea(areaPoints)
-      if (!activityArea || !activityAreaSummary) {
-        setCreateActivityError("Draw an activity area on the map before creating the activity.")
+      const activityAreaEntries = buildActivityAreaEntries(allSelectedActivityAreas)
+      if (!activityAreaEntries.length) {
+        setCreateActivityError(t("managementPlans.drawActivityAreaBeforeCreate"))
         setCreateActivityStep(2)
         setAreaDrawingActive(true)
         return
       }
 
-      data.area = activityArea
-      data.areaSummary = activityAreaSummary
+      data.areas = activityAreaEntries
+      data.area = activityAreaEntries[0].area
+      data.areaSummary = summarizeActivityAreas(allSelectedActivityAreas) ?? activityAreaEntries[0].areaSummary
     }
 
     const objective = trimToUndefined(createActivityForm.objective)
@@ -948,7 +1021,7 @@ export function ManagementPlansPage() {
         const raw = createActivityForm.speciesEffortMultipliers[species.id] ?? ""
         const value = Number(raw)
         if (!Number.isFinite(value) || value < 0) {
-          setCreateActivityError(`Enter a non-negative effort multiplier for ${species.label}.`)
+          setCreateActivityError(t("managementPlans.enterNonNegativeEffortMultiplier", { species: species.label }))
           setCreateActivityStep(3)
           return
         }
@@ -962,12 +1035,12 @@ export function ManagementPlansPage() {
       const categoryExists = constructionCategories.some((option) => option.id === category)
       const intensity = numberFromInput(createActivityForm.constructionIntensity)
       if (!categoryExists) {
-        setCreateActivityError("Choose a construction category.")
+        setCreateActivityError(t("managementPlans.chooseConstructionCategory"))
         setCreateActivityStep(3)
         return
       }
       if (intensity === undefined || intensity < 0) {
-        setCreateActivityError("Enter a non-negative construction intensity.")
+        setCreateActivityError(t("managementPlans.enterNonNegativeConstructionIntensity"))
         setCreateActivityStep(3)
         return
       }
@@ -1095,16 +1168,16 @@ export function ManagementPlansPage() {
                     }}
                     className="h-8 rounded-md px-3 text-white hover:bg-white/10 hover:text-white disabled:text-white/35"
                   >
-                    Clear
+                    {t("managementPlans.clear")}
                   </Button>
                 </div>
               ) : createActivityModalOpen && createActivityStep === 2 ? (
                 <div className="flex items-center gap-5 text-[0.72rem]">
                   <div className="rounded-md bg-[#3f5a50] px-3 py-2 font-medium text-white">
-                    Existing area loaded
+                    {t("managementPlans.existingAreaLoaded")}
                   </div>
                   <span className="text-white/75">
-                    Review it first, then choose whether to adjust or redraw.
+                    {t("managementPlans.reviewExistingArea")}
                   </span>
                 </div>
               ) : (
@@ -1113,10 +1186,10 @@ export function ManagementPlansPage() {
                     <div className="grid size-6 place-items-center rounded-md bg-[#3f5a50]">
                       <span className="text-[0.7rem]">⌖</span>
                     </div>
-                    <span>Activities</span>
+                    <span>{t("common.activities")}</span>
                   </div>
-                  <span className="opacity-70">{activeTasks.length} total</span>
-                  <span className="opacity-70">Select a plan activity to inspect</span>
+                  <span className="opacity-70">{t("managementPlans.totalActivities", { count: activeTasks.length })}</span>
+                  <span className="opacity-70">{t("managementPlans.selectActivity")}</span>
                 </div>
               )}
             </div>
@@ -1132,7 +1205,7 @@ export function ManagementPlansPage() {
                       onClick={() => handleCreateActivityModalOpenChange(true)}
                       className="h-8 rounded-md bg-black px-3 text-[0.8rem] font-medium text-white hover:bg-black/90"
                     >
-                      Create New +
+                      {t("managementPlans.createNew")}
                     </Button>
                   </div>
                 </div>
@@ -1141,10 +1214,10 @@ export function ManagementPlansPage() {
                   <div className="flex items-center justify-between px-5 py-4">
                     <div>
                       <div className="text-[0.72rem] uppercase tracking-[0.2em] text-zinc-400">
-                        {activePlan.name || "Untitled plan"}
+                        {activePlan.name || t("common.untitledPlan")}
                       </div>
                       <div className="mt-1 text-xs text-zinc-500">
-                        Location: {planLocationName(activePlan)}
+                        {t("common.location")}: {planLocationName(activePlan)}
                       </div>
                     </div>
                     <div className="text-[1.15rem] font-semibold tracking-[0.08em] text-zinc-700">
@@ -1200,14 +1273,17 @@ export function ManagementPlansPage() {
                             typeof data?.status === "string" && data.status.trim()
                               ? data.status.trim()
                               : null
+                          const typePrefix = t("managementPlans.typePrefix", { type: "" })
+                          const timingPrefix = t("managementPlans.timingPrefix", { timing: "" })
+                          const targetPrefix = t("managementPlans.targetPrefix", { target: "" })
                           const detailLines = summaryLines.filter(
                             (line) =>
-                              !line.startsWith("Type: ") &&
-                              !line.startsWith("Timing: ") &&
-                              !line.startsWith("Target: ")
+                              !line.startsWith(typePrefix) &&
+                              !line.startsWith(timingPrefix) &&
+                              !line.startsWith(targetPrefix)
                           )
                           const compactLines = [
-                            targetLine?.replace(/^Target:\s*/, ""),
+                            targetLine?.slice(targetPrefix.length).trim(),
                             ...detailLines,
                           ].filter((line): line is string => Boolean(line))
 
@@ -1232,14 +1308,14 @@ export function ManagementPlansPage() {
                                     <div className="min-w-0 flex-1">
                                       <div className="flex min-w-0 items-center gap-2">
                                         <div className="truncate text-[0.78rem] font-semibold leading-4 text-zinc-900">
-                                          {task.name || "Untitled activity"}
+                                          {task.name || t("common.untitledActivity")}
                                         </div>
                                         <span className="shrink-0 rounded-sm bg-white/70 px-1.5 py-0.5 text-[0.58rem] font-semibold uppercase tracking-[0.08em] text-zinc-600 ring-1 ring-black/5">
                                           {getActivityTypeLabel(task.type)}
                                         </span>
                                         {constantTask ? (
                                           <span className="shrink-0 rounded-sm bg-zinc-900 px-1.5 py-0.5 text-[0.58rem] font-semibold uppercase tracking-[0.08em] text-white">
-                                            Constant
+                                            {t("common.constant")}
                                           </span>
                                         ) : null}
                                       </div>
@@ -1264,8 +1340,8 @@ export function ManagementPlansPage() {
                                     <button
                                       type="button"
                                       onClick={() => openEditActivity(task)}
-                                      title={`Edit ${task.name || "activity"}`}
-                                      aria-label={`Edit ${task.name || "activity"}`}
+                                      title={t("managementPlans.editActivityNamed", { name: task.name || t("common.activity") })}
+                                      aria-label={t("managementPlans.editActivityNamed", { name: task.name || t("common.activity") })}
                                       className="sticky right-2 z-20 inline-flex size-6 shrink-0 items-center justify-center self-start rounded-sm bg-white/85 text-zinc-500 shadow-sm ring-1 ring-black/5 backdrop-blur transition-colors hover:bg-white hover:text-zinc-950"
                                     >
                                       <HugeiconsIcon icon={PencilEdit02Icon} size={12} />
@@ -1278,7 +1354,7 @@ export function ManagementPlansPage() {
                         })
                       ) : (
                           <div className="px-7 py-16 text-center text-sm text-zinc-500">
-                            No activities in this plan yet. Use Create New + to add the first one.
+                            {t("managementPlans.noActivitiesInPlan")}
                           </div>
                       )}
                         </div>
@@ -1289,7 +1365,7 @@ export function ManagementPlansPage() {
               </div>
             ) : (
               <div className="grid h-full place-items-center text-sm text-zinc-500">
-                {planLoading ? "Loading management plan..." : "Management plan not found."}
+                {planLoading ? t("managementPlans.loadingPlan") : t("managementPlans.planNotFound")}
               </div>
             )}
           </div>
@@ -1305,10 +1381,10 @@ export function ManagementPlansPage() {
                 <div className="flex items-start justify-between gap-4">
                   <div>
                     <p className="text-[1.05rem] text-zinc-500">
-                      {isEditingActivity ? "Edit activity" : "Create new activity"}
+                      {isEditingActivity ? t("managementPlans.editActivity") : t("managementPlans.createNewActivity")}
                     </p>
                     <AlertDialogTitle className="mt-2 text-[2.1rem] font-medium leading-none text-zinc-950">
-                      Basic information
+                      {t("managementPlans.basicInformation")}
                     </AlertDialogTitle>
                 </div>
 
@@ -1335,14 +1411,14 @@ export function ManagementPlansPage() {
 
               <AlertDialogDescription className="mt-8 text-[1rem] leading-7 text-zinc-700">
                 {isEditingActivity
-                  ? `Update the activity in ${activePlan?.name || "the current management plan"}.`
-                  : `This activity will be added to ${activePlan?.name || "the current management plan"}.`}
+                  ? t("managementPlans.editActivityInPlan", { plan: activePlan?.name || t("managementPlans.currentPlan") })
+                  : t("managementPlans.addActivityToPlan", { plan: activePlan?.name || t("managementPlans.currentPlan") })}
               </AlertDialogDescription>
 
               <div className="mt-10 space-y-8">
                 <div>
                   <label className="mb-3 block text-[1rem] font-medium text-zinc-950">
-                    Activity Type
+                    {t("managementPlans.activityType")}
                   </label>
                   <Select
                     value={createActivityForm.activityType}
@@ -1364,7 +1440,7 @@ export function ManagementPlansPage() {
                     }}
                   >
                     <SelectTrigger className="h-14 w-full rounded-2xl border-zinc-200 bg-white px-5 text-lg text-zinc-900">
-                      <SelectValue placeholder="Select type..." />
+                      <SelectValue placeholder={t("managementPlans.selectType")} />
                     </SelectTrigger>
                     <SelectContent>
                       {activityTypeOptions.map((option) => (
@@ -1378,7 +1454,7 @@ export function ManagementPlansPage() {
 
                 <div>
                   <label className="mb-3 block text-[1rem] font-medium text-zinc-950">
-                    Activity Name
+                    {t("managementPlans.activityName")}
                   </label>
                   <Input
                     value={createActivityForm.activityName}
@@ -1386,26 +1462,26 @@ export function ManagementPlansPage() {
                       updateActivityForm("activityName", event.target.value)
                       setCreateActivityError(null)
                     }}
-                    placeholder="E.g. Cod fishing effort adjustment"
+                    placeholder={t("managementPlans.activityNamePlaceholder")}
                     className="h-14 rounded-2xl border-zinc-200 bg-white px-5 text-lg placeholder:text-zinc-400"
                   />
                 </div>
 
                 <div>
                   <label className="mb-3 block text-[1rem] font-medium text-zinc-950">
-                    Target scope
+                    {t("managementPlans.targetScope")}
                   </label>
                   <div className="grid gap-3 sm:grid-cols-2">
                     {[
                       {
                         value: "polygon",
-                        label: "Selected area",
-                        description: "Draw an activity polygon on the map.",
+                        label: t("managementPlans.selectedArea"),
+                        description: t("managementPlans.selectedAreaDescription"),
                       },
                       {
                         value: "wholeTile",
-                        label: "Whole tile",
-                        description: "Apply the activity to the full tile.",
+                        label: t("common.wholeTile"),
+                        description: t("managementPlans.wholeTileDescription"),
                       },
                     ].map((option) => (
                       <button
@@ -1433,19 +1509,19 @@ export function ManagementPlansPage() {
 
                 <div>
                   <label className="mb-3 block text-[1rem] font-medium text-zinc-950">
-                    Timing
+                    {t("common.timeline")}
                   </label>
                   <div className="grid gap-3 sm:grid-cols-2">
                     {[
                       {
                         value: "scheduled",
-                        label: "Scheduled",
-                        description: "Uses start and end dates.",
+                        label: t("common.scheduled"),
+                        description: t("managementPlans.scheduledDescription"),
                       },
                       {
                         value: "constant",
-                        label: "Constant",
-                        description: "Persistent area without dates.",
+                        label: t("common.constant"),
+                        description: t("managementPlans.constantDescription"),
                       },
                     ].map((option) => (
                       <button
@@ -1479,7 +1555,7 @@ export function ManagementPlansPage() {
                   <div className="grid gap-6 sm:grid-cols-2">
                     <div>
                       <label className="mb-3 block text-[1rem] font-medium text-zinc-950">
-                        Start Date
+                        {t("common.startDate")}
                       </label>
                       <Input
                         type="date"
@@ -1491,7 +1567,7 @@ export function ManagementPlansPage() {
 
                     <div>
                       <label className="mb-3 block text-[1rem] font-medium text-zinc-950">
-                        End Date
+                        {t("common.endDate")}
                       </label>
                       <Input
                         type="date"
@@ -1506,7 +1582,7 @@ export function ManagementPlansPage() {
 
               <div className="mt-14 flex items-center justify-between gap-4">
                 <AlertDialogCancel className="h-auto border-0 bg-transparent px-0 text-[1.1rem] font-medium text-zinc-700 shadow-none hover:bg-transparent hover:text-zinc-950">
-                  Cancel
+                  {t("common.cancel")}
                 </AlertDialogCancel>
 
                 <Button
@@ -1515,10 +1591,10 @@ export function ManagementPlansPage() {
                   className="h-14 rounded-2xl bg-[#4f7865] px-7 text-[1.05rem] font-medium text-white hover:bg-[#456b5a]"
                 >
                   {createActivityForm.targetScope === "wholeTile"
-                    ? "Next: Details"
+                    ? t("managementPlans.nextDetails")
                     : isEditingActivity
-                      ? "Next: Edit Area"
-                      : "Next: Select Area"}
+                      ? t("managementPlans.nextEditArea")
+                      : t("managementPlans.nextSelectArea")}
                 </Button>
               </div>
             </div>
@@ -1531,9 +1607,9 @@ export function ManagementPlansPage() {
               <div className="p-6 sm:p-7">
                 <div className="flex items-start justify-between gap-4">
                   <div>
-                    <p className="text-[1rem] text-zinc-500">Select Activity Area</p>
+                    <p className="text-[1rem] text-zinc-500">{t("managementPlans.selectActivityArea")}</p>
                     <h2 className="mt-2 text-[2rem] font-medium leading-none text-zinc-950">
-                      Map selection
+                      {t("managementPlans.mapSelection")}
                     </h2>
                   </div>
 
@@ -1554,8 +1630,8 @@ export function ManagementPlansPage() {
 
                 <div className="mt-8 rounded-2xl border border-amber-200 bg-amber-50 px-4 py-4 text-sm leading-6 text-amber-900">
                   {isEditingExistingArea
-                    ? "This activity already has an area. Keep it as-is, adjust the current outline, or redraw it from scratch."
-                    : "Click directly on the map to place vertices for this activity area. Use at least three points, then click the first point again or press Finish shape to close the polygon."}
+                    ? t("managementPlans.existingAreaInstructions")
+                    : t("managementPlans.selectActivityAreaInstructions")}
                 </div>
 
                 {isEditingExistingArea ? (
@@ -1565,7 +1641,7 @@ export function ManagementPlansPage() {
                       onClick={handleAdjustExistingActivityArea}
                       className="h-11 rounded-2xl bg-[#4f7865] px-5 text-sm font-medium text-white hover:bg-[#456b5a]"
                     >
-                      Adjust existing outline
+                      {t("managementPlans.adjustExistingOutline")}
                     </Button>
                     <Button
                       type="button"
@@ -1573,40 +1649,44 @@ export function ManagementPlansPage() {
                       onClick={handleRedrawActivityArea}
                       className="h-11 rounded-2xl border-zinc-300 bg-white px-5 text-sm font-medium text-zinc-900 hover:bg-zinc-50"
                     >
-                      Redraw from scratch
+                      {t("managementPlans.redrawFromScratch")}
                     </Button>
                   </div>
                 ) : null}
 
                 <div className="mt-8 rounded-2xl border border-zinc-300 bg-white px-4 py-3">
-                  <div className="text-[1rem] font-medium text-zinc-950">Selected Area</div>
+                  <div className="text-[1rem] font-medium text-zinc-950">{t("managementPlans.selectedAreaTitle")}</div>
                   <div className="mt-4 space-y-2 text-[0.95rem] text-zinc-600">
                     <div className="flex items-center justify-between gap-6">
-                      <span>Activity</span>
+                      <span>{t("common.activity")}</span>
                       <span className="text-zinc-900">
-                        {createActivityForm.activityName.trim() || "Untitled activity"}
+                        {createActivityForm.activityName.trim() || t("common.untitledActivity")}
                       </span>
                     </div>
                     <div className="flex items-center justify-between gap-6">
-                      <span>Area size</span>
+                      <span>{t("common.areas")}</span>
+                      <span className="text-zinc-900">{allSelectedActivityAreas.length}</span>
+                    </div>
+                    <div className="flex items-center justify-between gap-6">
+                      <span>{t("common.areaSize")}</span>
                       <span className="text-zinc-900">
-                        {formatAreaKm2(selectedAreaSummary?.areaKm2)}
+                        {formatAreaKm2(selectedAreasSummary?.areaKm2 ?? selectedAreaSummary?.areaKm2)}
                       </span>
                     </div>
                     <div className="flex items-center justify-between gap-6">
-                      <span>Vertices</span>
+                      <span>{t("common.vertices")}</span>
                       <span className="text-zinc-900">
                         {selectedAreaSummary?.vertexCount ?? getActivityAreaVertexCount(areaPoints)}
                       </span>
                     </div>
                     <div className="flex items-center justify-between gap-6">
-                      <span>Status</span>
+                      <span>{t("common.status")}</span>
                       <span className="text-zinc-900">
-                        {isSelectedAreaClosed ? "Closed polygon" : "Open path"}
+                        {isSelectedAreaClosed ? t("managementPlans.closedPolygon") : t("common.openPath")}
                       </span>
                     </div>
                     <div className="flex items-center justify-between gap-6">
-                      <span>Center</span>
+                      <span>{t("common.center")}</span>
                       <span className="text-right text-zinc-900">
                         {selectedAreaSummary
                           ? `${formatCoordinate(selectedAreaSummary.centroid.lat, "lat")}, ${formatCoordinate(selectedAreaSummary.centroid.lng, "lng")}`
@@ -1614,7 +1694,7 @@ export function ManagementPlansPage() {
                       </span>
                     </div>
                     <div className="flex items-center justify-between gap-6">
-                      <span>Bounds</span>
+                      <span>{t("common.bounds")}</span>
                       <span className="text-right text-zinc-900">
                         {selectedAreaSummary
                           ? `${formatCoordinate(selectedAreaSummary.bbox.minLat, "lat")} to ${formatCoordinate(selectedAreaSummary.bbox.maxLat, "lat")}`
@@ -1627,8 +1707,36 @@ export function ManagementPlansPage() {
                 {!hasValidSelectedArea ? (
                   <div className="mt-4 rounded-2xl border border-zinc-200 bg-zinc-50 px-4 py-3 text-sm text-zinc-600">
                     {activityAreaStepMode === "draw"
-                      ? "Current selection is incomplete. Add at least three points on the map."
-                      : "No existing area is available yet. Choose Redraw from scratch to create one on the map."}
+                      ? completedActivityAreas.length
+                        ? t("managementPlans.incompleteArea")
+                        : t("managementPlans.incompleteCurrentArea")
+                      : t("managementPlans.noExistingArea")}
+                  </div>
+                ) : null}
+
+                {completedActivityAreas.length ? (
+                  <div className="mt-4 space-y-2 rounded-2xl border border-zinc-200 bg-zinc-50 px-4 py-3 text-sm text-zinc-700">
+                    {completedActivityAreas.map((points, index) => {
+                      const summary = summarizeActivityArea(points)
+                      return (
+                        <div key={`${index}-${points.length}`} className="flex items-center justify-between gap-4">
+                          <span>
+                            {t("managementPlans.areaSummary", { index: index + 1, area: formatAreaKm2(summary?.areaKm2) })}
+                          </span>
+                          <button
+                            type="button"
+                            onClick={() =>
+                              setCompletedActivityAreas((prev) =>
+                                prev.filter((_, areaIndex) => areaIndex !== index)
+                              )
+                            }
+                            className="text-zinc-500 transition-colors hover:text-zinc-950"
+                          >
+                            {t("managementPlans.remove")}
+                          </button>
+                        </div>
+                      )
+                    })}
                   </div>
                 ) : null}
 
@@ -1643,17 +1751,28 @@ export function ManagementPlansPage() {
                     }}
                     className="h-auto px-0 text-[1.1rem] font-medium text-zinc-700 hover:bg-transparent hover:text-zinc-950"
                   >
-                    Back
+                    {t("common.back")}
                   </Button>
 
-                  <Button
-                    type="button"
-                    disabled={!hasValidSelectedArea}
-                    onClick={handleActivityStepTwoNext}
-                    className="h-12 rounded-2xl bg-[#4f7865] px-7 text-[1.05rem] font-medium text-white hover:bg-[#456b5a]"
-                  >
-                    Next: Details
-                  </Button>
+                  <div className="flex items-center gap-3">
+                    <Button
+                      type="button"
+                      variant="outline"
+                      disabled={!hasValidSelectedArea}
+                      onClick={handleAddAnotherActivityArea}
+                      className="h-12 rounded-2xl border-zinc-300 bg-white px-5 text-[0.95rem] font-medium text-zinc-900 hover:bg-zinc-50"
+                    >
+                      {t("managementPlans.addAnotherArea")}
+                    </Button>
+                    <Button
+                      type="button"
+                      disabled={!hasAnyValidSelectedArea}
+                      onClick={handleActivityStepTwoNext}
+                      className="h-12 rounded-2xl bg-[#4f7865] px-7 text-[1.05rem] font-medium text-white hover:bg-[#456b5a]"
+                    >
+                      {t("managementPlans.nextDetails")}
+                    </Button>
+                  </div>
                 </div>
               </div>
             </div>
@@ -1667,9 +1786,9 @@ export function ManagementPlansPage() {
                 <div className="min-h-0 flex-1 overflow-y-auto p-7 sm:p-8">
                   <div className="flex items-start justify-between gap-4">
                     <div>
-                      <p className="text-[1.05rem] text-zinc-500">Activity Details</p>
+                      <p className="text-[1.05rem] text-zinc-500">{t("managementPlans.activityDetails")}</p>
                       <h2 className="mt-2 text-[2.1rem] font-medium leading-none text-zinc-950">
-                        Parameters &amp; impacts
+                        {t("managementPlans.parametersImpacts")}
                       </h2>
                     </div>
 
@@ -1697,34 +1816,34 @@ export function ManagementPlansPage() {
                   <div className="mt-10 grid gap-x-8 gap-y-10 lg:grid-cols-2">
                     <div>
                       <label className="mb-3 block text-[1rem] font-medium text-zinc-950">
-                        Target / Objective
+                        {t("managementPlans.targetObjective")}
                       </label>
                       <Input
                         value={createActivityForm.objective}
                         onChange={(event) => updateActivityForm("objective", event.target.value)}
-                        placeholder="E.g. reduce fishing pressure on codfish"
+                        placeholder={t("managementPlans.objectivePlaceholder")}
                         className="h-14 rounded-2xl border-zinc-200 bg-white px-5 text-lg placeholder:text-zinc-400"
                       />
                     </div>
 
                     <div>
                       <label className="mb-3 block text-[1rem] font-medium text-zinc-950">
-                        Description
+                        {t("common.details")}
                       </label>
                       <Textarea
                         value={createActivityForm.description}
                         onChange={(event) => updateActivityForm("description", event.target.value)}
-                        placeholder="Describe the activity..."
+                        placeholder={t("managementPlans.descriptionPlaceholder")}
                         className="min-h-36 rounded-2xl border-zinc-200 bg-white px-5 py-4 text-lg placeholder:text-slate-400"
                       />
                     </div>
 
                     <div className="lg:col-span-2">
-                      <div className="text-[1rem] font-medium text-zinc-950">Financial</div>
+                      <div className="text-[1rem] font-medium text-zinc-950">{t("managementPlans.financial")}</div>
                       <div className="mt-4 grid gap-8 lg:grid-cols-2">
                         <div>
                           <label className="mb-3 block text-[1rem] font-medium text-zinc-950">
-                            Cost (SEK)
+                            {t("common.costSek")}
                           </label>
                           <Input
                             value={createActivityForm.cost}
@@ -1737,7 +1856,7 @@ export function ManagementPlansPage() {
 
                         <div>
                           <label className="mb-3 block text-[1rem] font-medium text-zinc-950">
-                            Revenue (SEK)
+                            {t("common.revenueSek")}
                           </label>
                           <Input
                             value={createActivityForm.revenue}
@@ -1753,7 +1872,7 @@ export function ManagementPlansPage() {
                     {createActivityForm.activityType === "fishing" ? (
                       <div className="lg:col-span-2">
                         <div className="text-[1rem] font-medium text-zinc-950">
-                          Fishing effort multipliers
+                          {t("managementPlans.fishingEffortMultipliers")}
                         </div>
                         <div className="mt-5 grid gap-5 sm:grid-cols-2 xl:grid-cols-3">
                           {marineSpecies.map((species) => (
@@ -1785,12 +1904,12 @@ export function ManagementPlansPage() {
                     {createActivityForm.activityType === "construction" ? (
                       <div className="lg:col-span-2">
                         <div className="text-[1rem] font-medium text-zinc-950">
-                          Construction parameters
+                          {t("managementPlans.constructionParameters")}
                         </div>
                         <div className="mt-5 grid gap-6 lg:grid-cols-2">
                           <div>
                             <label className="mb-3 block text-[1rem] font-medium text-zinc-950">
-                              Category
+                              {t("managementPlans.category")}
                             </label>
                             <Select
                               value={createActivityForm.constructionCategory}
@@ -1799,7 +1918,7 @@ export function ManagementPlansPage() {
                               }
                             >
                               <SelectTrigger className="h-14 w-full rounded-2xl border-zinc-200 bg-white px-5 text-lg text-zinc-900">
-                                <SelectValue placeholder="Select category..." />
+                                <SelectValue placeholder={t("managementPlans.selectCategory")} />
                               </SelectTrigger>
                               <SelectContent>
                                 {constructionCategories.map((category) => (
@@ -1812,7 +1931,7 @@ export function ManagementPlansPage() {
                           </div>
                           <div>
                             <label className="mb-3 block text-[1rem] font-medium text-zinc-950">
-                              Intensity
+                              {t("managementPlans.intensity")}
                             </label>
                             <Input
                               value={createActivityForm.constructionIntensity}
@@ -1826,14 +1945,14 @@ export function ManagementPlansPage() {
                           </div>
                           <div className="lg:col-span-2">
                             <label className="mb-3 block text-[1rem] font-medium text-zinc-950">
-                              Construction description
+                              {t("managementPlans.constructionDescription")}
                             </label>
                             <Textarea
                               value={createActivityForm.constructionDescription}
                               onChange={(event) =>
                                 updateActivityForm("constructionDescription", event.target.value)
                               }
-                              placeholder="Describe the construction pressure or mitigation context..."
+                              placeholder={t("managementPlans.constructionDescriptionPlaceholder")}
                               className="min-h-28 rounded-2xl border-zinc-200 bg-white px-5 py-4 text-lg placeholder:text-slate-400"
                             />
                           </div>
@@ -1853,7 +1972,7 @@ export function ManagementPlansPage() {
                     }}
                     className="h-auto px-0 text-[1.1rem] font-medium text-zinc-700 hover:bg-transparent hover:text-zinc-950"
                   >
-                    Back
+                    {t("common.back")}
                   </Button>
 
                   <Button
@@ -1864,11 +1983,11 @@ export function ManagementPlansPage() {
                   >
                     {isCreatingActivity
                       ? isEditingActivity
-                        ? "Saving..."
-                        : "Creating..."
+                        ? t("common.saving")
+                        : t("managementPlans.creatingPlan")
                       : isEditingActivity
-                        ? "Save Changes"
-                        : "Create Activity"}
+                        ? t("managementPlans.saveChanges")
+                        : t("managementPlans.createActivity")}
                   </Button>
                 </div>
               </div>
@@ -1886,12 +2005,12 @@ export function ManagementPlansPage() {
           <div className="flex items-start justify-between gap-4">
             <div>
               <h1 className="text-[2rem] font-medium tracking-[-0.02em] text-zinc-950">
-                Management plans
+                {t("common.managementPlans")}
               </h1>
               <p className="mt-1 text-sm text-zinc-500">
                 {filteredLocation
-                  ? `Showing plans for ${filteredLocation.name?.trim() || "the selected location"}.`
-                  : "Create a plan for a location first, then add one or more activities inside it."}
+                  ? t("managementPlans.showingPlansFor", { location: filteredLocation.name?.trim() || t("managementPlans.selectedLocation") })
+                  : t("managementPlans.createPlanFirst")}
               </p>
             </div>
 
@@ -1902,13 +2021,13 @@ export function ManagementPlansPage() {
               onClick={() => void refreshPlans()}
               className="mt-1 rounded-lg bg-white px-3 text-sm text-zinc-700 shadow-sm"
             >
-              {loading ? "Loading..." : "Reload"}
+              {loading ? t("common.loading") : t("common.reload")}
             </Button>
           </div>
 
           {error ? (
             <div className="mt-6 rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
-              Failed to load management plans: {error.message}
+              {t("managementPlans.failedToLoadPlans", { message: error.message })}
             </div>
           ) : null}
 
@@ -1917,15 +2036,15 @@ export function ManagementPlansPage() {
               <table className="min-w-full table-fixed">
                 <thead>
                   <tr className="border-b border-zinc-200 bg-white text-left text-sm text-zinc-800">
-                    <th className="px-4 py-3 font-medium">Plan</th>
-                    <th className="px-4 py-3 font-medium">Location</th>
-                    <th className="px-4 py-3 font-medium">Activities</th>
-                    <th className="px-4 py-3 font-medium">Start date</th>
-                    <th className="px-4 py-3 font-medium">End date</th>
-                    <th className="px-4 py-3 font-medium">Cost (SEK)</th>
-                    <th className="px-4 py-3 font-medium">Revenue (SEK)</th>
-                    <th className="px-4 py-3 font-medium">Status</th>
-                    <th className="px-4 py-3 font-medium">Actions</th>
+                    <th className="px-4 py-3 font-medium">{t("common.plan")}</th>
+                    <th className="px-4 py-3 font-medium">{t("common.location")}</th>
+                    <th className="px-4 py-3 font-medium">{t("common.activities")}</th>
+                    <th className="px-4 py-3 font-medium">{t("common.startDate")}</th>
+                    <th className="px-4 py-3 font-medium">{t("common.endDate")}</th>
+                    <th className="px-4 py-3 font-medium">{t("common.costSek")}</th>
+                    <th className="px-4 py-3 font-medium">{t("common.revenueSek")}</th>
+                    <th className="px-4 py-3 font-medium">{t("common.status")}</th>
+                    <th className="px-4 py-3 font-medium">{t("common.actions")}</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -1954,7 +2073,7 @@ export function ManagementPlansPage() {
                             onClick={() => navigate(`/management-plans/${row.id}`)}
                             className="text-zinc-600 transition-colors hover:text-zinc-950"
                           >
-                            Open
+                            {t("common.open")}
                           </button>
                         </td>
                       </tr>
@@ -1963,10 +2082,10 @@ export function ManagementPlansPage() {
                     <tr>
                       <td colSpan={9} className="px-4 py-10 text-center text-sm text-zinc-500">
                         {loading
-                          ? "Loading plans..."
+                          ? t("managementPlans.loadingPlans")
                           : filteredLocation
-                            ? "No management plans found for this location."
-                            : "No management plans found."}
+                            ? t("managementPlans.noPlansForLocation")
+                            : t("managementPlans.noPlans")}
                       </td>
                     </tr>
                   )}
@@ -1981,7 +2100,7 @@ export function ManagementPlansPage() {
               onClick={() => handleCreatePlanModalOpenChange(true)}
               className="h-9 rounded-lg bg-black px-4 text-sm font-medium text-white hover:bg-black/90"
             >
-              Create New +
+              {t("managementPlans.createNew")}
             </Button>
             {filteredLocation ? (
               <Button
@@ -1990,7 +2109,7 @@ export function ManagementPlansPage() {
                 onClick={() => navigate("/management-plans")}
                 className="h-9 rounded-lg border-zinc-300 bg-transparent px-4 text-sm font-medium text-zinc-700 hover:bg-white"
               >
-                Clear location filter
+                {t("tiles.clearLocationFilter")}
               </Button>
             ) : null}
           </div>
@@ -2006,9 +2125,9 @@ export function ManagementPlansPage() {
           <div className="p-7 sm:p-8">
             <div className="flex items-start justify-between gap-4">
               <div>
-                <p className="text-[1.05rem] text-zinc-500">New management plan</p>
+                <p className="text-[1.05rem] text-zinc-500">{t("managementPlans.newManagementPlan")}</p>
                 <AlertDialogTitle className="mt-2 text-[2.1rem] font-medium leading-none text-zinc-950">
-                  Create plan
+                  {t("managementPlans.createPlan")}
                 </AlertDialogTitle>
               </div>
 
@@ -2022,9 +2141,7 @@ export function ManagementPlansPage() {
             </div>
 
             <AlertDialogDescription className="mt-10 text-[1rem] leading-7 text-zinc-700">
-              A management plan is tied to a single location and acts as the container for one or
-              more activities. After creation you will be taken directly to the timeline view for
-              that plan.
+              {t("managementPlans.createPlanDescription")}
             </AlertDialogDescription>
 
             {createPlanError ? (
@@ -2035,7 +2152,7 @@ export function ManagementPlansPage() {
 
             <div className="mt-10">
               <label className="mb-3 block text-[1rem] font-medium text-zinc-950">
-                Plan Name
+                {t("managementPlans.planName")}
               </label>
               <Input
                 value={createPlanForm.name}
@@ -2043,14 +2160,14 @@ export function ManagementPlansPage() {
                   setCreatePlanForm((prev) => ({ ...prev, name: event.target.value }))
                   setCreatePlanError(null)
                 }}
-                placeholder="E.g. 2026 regional habitat programme"
+                placeholder={t("managementPlans.planNamePlaceholder")}
                 className="h-14 rounded-2xl border-zinc-200 bg-white px-5 text-lg placeholder:text-zinc-400"
               />
             </div>
 
             <div className="mt-8">
               <label className="mb-3 block text-[1rem] font-medium text-zinc-950">
-                Location
+                {t("common.location")}
               </label>
               <Select
                 value={createPlanForm.tileId}
@@ -2063,15 +2180,15 @@ export function ManagementPlansPage() {
                   <SelectValue
                     placeholder={
                       tilesLoading && !locationOptions.length
-                        ? "Loading locations..."
-                        : "Select location..."
+                        ? t("managementPlans.loadingLocations")
+                        : t("managementPlans.selectLocation")
                     }
                   />
                 </SelectTrigger>
                 <SelectContent>
                   {locationOptions.map((tile: Tile) => (
                     <SelectItem key={tile.id} value={tile.id}>
-                      {tile.name?.trim() || "Untitled location"}
+                      {tile.name?.trim() || t("common.untitledLocation")}
                     </SelectItem>
                   ))}
                 </SelectContent>
@@ -2080,7 +2197,7 @@ export function ManagementPlansPage() {
 
             <div className="mt-14 flex items-center justify-between gap-4">
               <AlertDialogCancel className="h-auto border-0 bg-transparent px-0 text-[1.1rem] font-medium text-zinc-700 shadow-none hover:bg-transparent hover:text-zinc-950">
-                Cancel
+                {t("common.cancel")}
               </AlertDialogCancel>
 
               <Button
@@ -2089,7 +2206,7 @@ export function ManagementPlansPage() {
                 onClick={() => void handleCreatePlan()}
                 className="h-14 rounded-2xl bg-[#4f7865] px-7 text-[1.05rem] font-medium text-white hover:bg-[#456b5a]"
               >
-                {isCreatingPlan ? "Creating..." : "Create Plan"}
+                {isCreatingPlan ? t("managementPlans.creatingPlan") : t("managementPlans.createPlan")}
               </Button>
             </div>
           </div>

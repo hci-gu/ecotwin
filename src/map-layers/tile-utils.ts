@@ -1,3 +1,5 @@
+import { t } from "@/lib/translations"
+
 export function tileCenterLngLat(x: number, y: number, zoom: number) {
   const n = 2 ** zoom
   const lng = ((x + 0.5) / n) * 360 - 180
@@ -15,7 +17,6 @@ export function tileCornerLngLat(x: number, y: number, zoom: number) {
 }
 
 export function formatTileLabel(name: string | undefined) {
-  const label = name?.trim() || "Untitled tile"
+  const label = name?.trim() || t("common.untitledTile")
   return label.length > 44 ? `${label.slice(0, 43)}…` : label
 }
-

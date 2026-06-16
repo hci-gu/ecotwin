@@ -12,6 +12,7 @@ type EeMaps = {
 const CACHE_WINDOW_MS = 10 * 60 * 1000
 
 let cachedMaps: EeMaps | null = null
+let cachedLandcoverMap: { date: number; landcoverUrlFormat: string } | null = null
 
 function mapToUrlFormat(map: { urlFormat?: string } | null | undefined) {
   const urlFormat = map?.urlFormat?.trim()
@@ -20,6 +21,21 @@ function mapToUrlFormat(map: { urlFormat?: string } | null | undefined) {
   }
 
   return urlFormat
+}
+
+function mapCallback(resolve: (urlFormat: string) => void, reject: (reason?: unknown) => void) {
+  return (map: { urlFormat?: string } | null | undefined, error?: unknown) => {
+    if (error) {
+      reject(error)
+      return
+    }
+
+    try {
+      resolve(mapToUrlFormat(map))
+    } catch (callbackError) {
+      reject(callbackError)
+    }
+  }
 }
 
 function getLandcoverMap() {
@@ -44,8 +60,7 @@ function getLandcoverMap() {
           "#B39FE1",
         ],
       },
-      (map: { urlFormat?: string }) => resolve(mapToUrlFormat(map)),
-      reject
+      mapCallback(resolve, reject)
     )
   })
 }
@@ -66,8 +81,7 @@ function getWaterTemperatureMap() {
           max: 34,
           palette: ["000000", "005aff", "43c8c8", "fff700", "ff0000"],
         },
-        (map: { urlFormat?: string }) => resolve(mapToUrlFormat(map)),
-        reject
+        mapCallback(resolve, reject)
       )
   })
 }
@@ -81,8 +95,7 @@ function getWaterVelocityMap() {
       .hypot(velocity.select("velocity_v_0"))
       .getMap(
         { min: 0, max: 1 },
-        (map: { urlFormat?: string }) => resolve(mapToUrlFormat(map)),
-        reject
+        mapCallback(resolve, reject)
       )
   })
 }
@@ -97,6 +110,22 @@ async function authenticate(credentials: Record<string, unknown>) {
   })
 }
 
+export async function getLandcoverUrlFormat(credentials: Record<string, unknown>) {
+  if (cachedLandcoverMap && Date.now() - cachedLandcoverMap.date < CACHE_WINDOW_MS) {
+    return cachedLandcoverMap.landcoverUrlFormat
+  }
+
+  await authenticate(credentials)
+
+  const landcoverUrlFormat = await getLandcoverMap()
+  cachedLandcoverMap = {
+    date: Date.now(),
+    landcoverUrlFormat,
+  }
+
+  return landcoverUrlFormat
+}
+
 export async function getEeMaps(credentials: Record<string, unknown>) {
   if (cachedMaps && Date.now() - cachedMaps.date < CACHE_WINDOW_MS) {
     return cachedMaps
@@ -104,8 +133,11 @@ export async function getEeMaps(credentials: Record<string, unknown>) {
 
   await authenticate(credentials)
 
-  const [landcoverUrlFormat, waterTemperatureUrlFormat, waterVelocityUrlFormat] =
-    await Promise.all([getLandcoverMap(), getWaterTemperatureMap(), getWaterVelocityMap()])
+  const [landcoverUrlFormat, waterTemperatureUrlFormat, waterVelocityUrlFormat] = await Promise.all([
+    getLandcoverMap(),
+    getWaterTemperatureMap(),
+    getWaterVelocityMap(),
+  ])
 
   cachedMaps = {
     date: Date.now(),

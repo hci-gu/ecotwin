@@ -11,7 +11,6 @@ export default defineConfig([
     'pocketbase/pb_data',
     'pocketbase/pocketbase',
     'pocketbase/app%',
-    'services/mock-simulation/data/maps',
   ]),
   {
     files: ['**/*.{ts,tsx}'],

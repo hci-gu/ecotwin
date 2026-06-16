@@ -90,7 +90,7 @@ export async function createLandcover(pb: PocketBase, image: Buffer) {
 
 export async function createOceanData(
   pb: PocketBase,
-  assets: { waterVelocity: Buffer; waterTemperature: Buffer; depth: Buffer }
+  assets: { waterVelocity: Buffer; waterTemperature: Buffer; depth?: Buffer }
 ) {
   const formData = new FormData()
   formData.set(
@@ -101,7 +101,9 @@ export async function createOceanData(
     "water_temperature",
     new File([toFileBytes(assets.waterTemperature)], "water_temperature.png", { type: "image/png" })
   )
-  formData.set("depth", new File([toFileBytes(assets.depth)], "depth.png", { type: "image/png" }))
+  if (assets.depth) {
+    formData.set("depth", new File([toFileBytes(assets.depth)], "depth.png", { type: "image/png" }))
+  }
   return pb.collection("oceanData").create<OceanDataRecord>(formData)
 }
 

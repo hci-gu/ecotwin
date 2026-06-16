@@ -33,6 +33,13 @@ import {
   formatSimulationDate,
   formatSimulationDateForStep,
 } from "@/lib/simulation-dates"
+import { speciesIndexOf } from "@/lib/species-matching"
+import {
+  getManagementPlanAreaColor,
+  managementPlanAreaId,
+} from "@/lib/management-plan-areas"
+import { t } from "@/lib/translations"
+import { demoConfig } from "@/config/demo-config"
 import { tileSelectionCandidateFromLngLat } from "@/lib/tile-selection"
 import {
   activityAreaDrawingActiveAtom,
@@ -59,8 +66,10 @@ import {
 } from "@/state/ecotwin-atoms"
 import {
   biomassVisualizationAtom,
+  demoActiveSimulationIdAtom,
   selectedSimulationSpeciesAtom,
   simulationStepAtom,
+  visibleManagementPlanAreaIdsAtom,
 } from "@/state/simulation-ui-state"
 import type { ManagementPlan, Task, Tile } from "@/state/ecotwin-types"
 
@@ -103,8 +112,8 @@ function taskData(task?: Task) {
   return value
 }
 
-function taskAreaGeometry(task?: Task) {
-  const geometry = taskData(task)?.area
+function normalizeTaskAreaGeometry(value: unknown) {
+  const geometry = value
   if (!geometry || typeof geometry !== "object" || Array.isArray(geometry)) return null
 
   const candidate = geometry as {
@@ -132,6 +141,20 @@ function taskAreaGeometry(task?: Task) {
     type: "Polygon" as const,
     coordinates: [normalizedRing],
   }
+}
+
+function taskAreaGeometries(task?: Task) {
+  const data = taskData(task)
+  const areas = Array.isArray(data?.areas)
+    ? data.areas
+        .map((areaItem) => normalizeTaskAreaGeometry(areaItem?.area))
+        .filter((geometry): geometry is NonNullable<typeof geometry> => Boolean(geometry))
+    : []
+
+  if (areas.length) return areas
+
+  const legacyGeometry = normalizeTaskAreaGeometry(data?.area)
+  return legacyGeometry ? [legacyGeometry] : []
 }
 
 function sortPlanTasks(tasks: Task[]) {
@@ -170,7 +193,9 @@ export function MapViewport() {
   const [tooltip, setTooltip] = useState<{ x: number; y: number; text: string } | null>(null)
 
   const biomassVisualization = useAtomValue(biomassVisualizationAtom)
+  const demoActiveSimulationId = useAtomValue(demoActiveSimulationIdAtom)
   const selectedSimulationSpecies = useAtomValue(selectedSimulationSpeciesAtom)
+  const visibleManagementPlanAreaIds = useAtomValue(visibleManagementPlanAreaIdsAtom)
   const tiles = useAtomValue(tilesListAtom)
   const tileByIdCache = useAtomValue(tileByIdCacheAtom)
   const managementPlans = useAtomValue(managementPlansAtom)
@@ -202,12 +227,20 @@ export function MapViewport() {
   const tileRouteMatch = useMatch("/tile/:tileId/*")
   const simulationRouteMatch = useMatch("/tile/:tileId/simulation/:simulationId")
   const managementPlanRouteMatch = useMatch("/management-plans/:planId")
-  const routeTileId = tileRouteMatch?.params?.tileId
+  const demoRouteMatch = useMatch("/demo")
+  const isDemoRoute = Boolean(demoRouteMatch)
+  const routeTileId =
+    tileRouteMatch?.params?.tileId ??
+    (isDemoRoute ? demoConfig.tileId : undefined)
   const routeSimulationId = simulationRouteMatch?.params?.simulationId
-  const routeManagementPlanId = managementPlanRouteMatch?.params?.planId
-  const isTileRoute = Boolean(tileRouteMatch)
+  const routeManagementPlanId =
+    managementPlanRouteMatch?.params?.planId ??
+    (isDemoRoute ? demoConfig.managementPlanId : undefined)
+  const isTileRoute = Boolean(tileRouteMatch || (isDemoRoute && routeTileId))
   const isSimulationRoute = Boolean(routeTileId && routeSimulationId)
   const isManagementPlanRoute = Boolean(routeManagementPlanId)
+  const activeRouteSimulationId = routeSimulationId ?? (isDemoRoute ? demoActiveSimulationId ?? undefined : undefined)
+  const hasBiomassSimulation = Boolean(routeTileId && activeRouteSimulationId)
   const lastRouteZoomedTileIdRef = useRef<string | null>(null)
   const lastRouteZoomedManagementPlanIdRef = useRef<string | null>(null)
 
@@ -253,6 +286,10 @@ export function MapViewport() {
   const activeManagementPlanTasks = useMemo(
     () => getPlanTasks(activeManagementPlan),
     [activeManagementPlan]
+  )
+  const visibleManagementPlanAreaIdSet = useMemo(
+    () => visibleManagementPlanAreaIds ? new Set(visibleManagementPlanAreaIds) : null,
+    [visibleManagementPlanAreaIds]
   )
   const activeManagementPlanTile = useMemo(
     () => getPlanTile(activeManagementPlan, getTileById),
@@ -346,8 +383,8 @@ export function MapViewport() {
   }, [activeManagementPlan?.tile, activeManagementPlanTile, fetchTileById, isManagementPlanRoute])
 
   const biomassBase = useMemo(() => {
-    if (!routeTileId || !routeSimulationId) return null
-    const result = simulationResultByRecordId[routeSimulationId]
+    if (!routeTileId || !activeRouteSimulationId) return null
+    const result = simulationResultByRecordId[activeRouteSimulationId]
     if (!result) return null
     const tile = getTileById(routeTileId)
     if (!tile) return null
@@ -393,7 +430,7 @@ export function MapViewport() {
       endDate: result.end_date,
       tickDurationDays: result.tick_duration_days,
     }
-  }, [getTileById, routeSimulationId, routeTileId, simulationResultByRecordId])
+  }, [activeRouteSimulationId, getTileById, routeTileId, simulationResultByRecordId])
 
   const biomassOverlay = useMemo<BiomassOverlayFrame | null>(() => {
     if (!biomassBase) return null
@@ -405,7 +442,7 @@ export function MapViewport() {
       selectedSimulationSpecies === null
         ? Array.from({ length: biomassBase.s }, (_, index) => index)
         : selectedSimulationSpecies
-            .map((name) => biomassBase.species.indexOf(name))
+            .map((name) => speciesIndexOf(biomassBase.species, name))
             .filter((index) => index >= 0)
     return { ...biomassBase, frame, speciesIndices }
   }, [biomassBase, selectedSimulationSpecies, simulationStep])
@@ -442,7 +479,7 @@ export function MapViewport() {
 
   useEffect(() => {
     const routeZoomKey = routeTileId
-      ? `${routeTileId}:${isSimulationRoute ? "simulation" : "tile"}`
+      ? `${routeTileId}:${isDemoRoute ? "demo" : isSimulationRoute ? "simulation" : "tile"}`
       : null
 
     if (!routeTileId) {
@@ -480,15 +517,28 @@ export function MapViewport() {
         }
         const container = map.getContainer?.()
         const containerWidth = container?.clientWidth ?? window.innerWidth
+        const demoLeftInset = 336
+        const demoTileWidth = Math.min(
+          Math.max(384, window.innerHeight - 208),
+          Math.max(384, Math.min(window.innerHeight - 208, containerWidth - 32 - 320 - 416))
+        )
+        const demoRightInset = Math.max(544, containerWidth - demoLeftInset - demoTileWidth)
         mapRefValue.fitBounds(bounds, {
-          padding: isSimulationRoute
+          padding: isDemoRoute
             ? {
-                top: 80,
-                right: Math.max(80, Math.floor(containerWidth * 0.24) + 24),
-                bottom: 80,
-                left: 80,
+                top: 128,
+                right: demoRightInset,
+                bottom: 24,
+                left: demoLeftInset,
               }
-            : 80,
+            : isSimulationRoute
+              ? {
+                  top: 80,
+                  right: Math.max(80, Math.floor(containerWidth * 0.24) + 24),
+                  bottom: 80,
+                  left: 80,
+                }
+              : 80,
           duration: 800,
         })
         lastRouteZoomedTileIdRef.current = routeZoomKey
@@ -505,10 +555,10 @@ export function MapViewport() {
         window.clearTimeout(retryTimer)
       }
     }
-  }, [getTileById, isSimulationRoute, mapLoaded, routeTileId])
+  }, [getTileById, isDemoRoute, isSimulationRoute, mapLoaded, routeTileId])
 
   useEffect(() => {
-    if (!isManagementPlanRoute || !routeManagementPlanId) {
+    if (isDemoRoute || !isManagementPlanRoute || !routeManagementPlanId) {
       lastRouteZoomedManagementPlanIdRef.current = null
       return
     }
@@ -556,7 +606,7 @@ export function MapViewport() {
         window.clearTimeout(retryTimer)
       }
     }
-  }, [activeManagementPlanBounds, isManagementPlanRoute, mapLoaded, routeManagementPlanId])
+  }, [activeManagementPlanBounds, isDemoRoute, isManagementPlanRoute, mapLoaded, routeManagementPlanId])
 
   const hoveredImageOverlaySource = useMemo(() => {
     if (!hoveredImageOverlay) return null
@@ -621,32 +671,30 @@ export function MapViewport() {
     if (!isManagementPlanRoute || !activeManagementPlanTasks.length) return null
 
     const features = activeManagementPlanTasks
-      .map((task) => {
-        const geometry = taskAreaGeometry(task)
-        if (!geometry) return null
-        return {
-          type: "Feature" as const,
-          properties: {
-            taskId: task.id,
-            taskName: task.name || "Untitled activity",
-            taskType: task.type,
-            areaColor:
-              task.type === "fishing"
-                ? "#0ea5e9"
-                : task.type === "construction"
-                  ? "#f97316"
-                  : task.type === "windFarm"
-                    ? "#22c55e"
-                    : task.type === "seaLane"
-                      ? "#2563eb"
-                      : task.type === "trawlArea"
-                        ? "#e11d48"
-                        : "#64748b",
-          },
-          geometry,
-        }
+      .flatMap((task) => {
+        const geometries = taskAreaGeometries(task)
+        return geometries
+          .map((geometry, index) => {
+            const areaId = managementPlanAreaId(task.id, index)
+            if (visibleManagementPlanAreaIdSet && !visibleManagementPlanAreaIdSet.has(areaId)) {
+              return null
+            }
+
+            return {
+              type: "Feature" as const,
+              properties: {
+                areaId,
+                taskId: task.id,
+                taskName: task.name || t("common.untitledActivity"),
+                areaIndex: index,
+                taskType: task.type,
+                areaColor: getManagementPlanAreaColor(task.type),
+              },
+              geometry,
+            }
+          })
+          .filter((feature): feature is NonNullable<typeof feature> => Boolean(feature))
       })
-      .filter((feature): feature is NonNullable<typeof feature> => Boolean(feature))
 
     if (!features.length) return null
 
@@ -654,14 +702,24 @@ export function MapViewport() {
       type: "FeatureCollection" as const,
       features,
     }
-  }, [activeManagementPlanTasks, isManagementPlanRoute])
+  }, [activeManagementPlanTasks, isManagementPlanRoute, visibleManagementPlanAreaIdSet])
 
   const savedActivityAreaLabelsGeoJson = useMemo(() => {
     if (!isManagementPlanRoute || !activeManagementPlanTasks.length) return null
 
     const features = activeManagementPlanTasks
-      .map((task) => {
-        const summary = taskData(task)?.areaSummary
+      .flatMap((task) => {
+        const data = taskData(task)
+        const summaries = Array.isArray(data?.areas) && data.areas.length
+          ? data.areas.map((areaItem) => areaItem?.areaSummary)
+          : [data?.areaSummary]
+
+        return summaries.map((summary, index) => {
+        const areaId = managementPlanAreaId(task.id, index)
+        if (visibleManagementPlanAreaIdSet && !visibleManagementPlanAreaIdSet.has(areaId)) {
+          return null
+        }
+
         const centroid = summary?.centroid
         if (
           !centroid ||
@@ -676,13 +734,17 @@ export function MapViewport() {
         return {
           type: "Feature" as const,
           properties: {
-            label: task.name || "Untitled activity",
+            label:
+              summaries.length > 1
+                ? `${task.name || t("common.untitledActivity")} ${index + 1}`
+                : task.name || t("common.untitledActivity"),
           },
           geometry: {
             type: "Point" as const,
             coordinates: [centroid.lng, centroid.lat] as [number, number],
           },
         }
+        })
       })
       .filter((feature): feature is NonNullable<typeof feature> => Boolean(feature))
 
@@ -692,7 +754,7 @@ export function MapViewport() {
       type: "FeatureCollection" as const,
       features,
     }
-  }, [activeManagementPlanTasks, isManagementPlanRoute])
+  }, [activeManagementPlanTasks, isManagementPlanRoute, visibleManagementPlanAreaIdSet])
 
   const draftActivityAreaFillGeoJson = useMemo(() => {
     if (!activityAreaDrawingActive || activityAreaPoints.length < 3) return null
@@ -783,7 +845,7 @@ export function MapViewport() {
     if (info.layer?.id === "biomass-h3-hex") {
       const obj = info.object as BiomassHexDatum | null
       if (!obj) return null
-      return `${obj.hex} biomass: ${obj.count.toFixed(2)}`
+      return `${obj.species} biomass: ${obj.count.toFixed(2)}`
     }
 
     return null
@@ -814,7 +876,7 @@ export function MapViewport() {
   }, [deckLayers, onDeckHover])
 
   useEffect(() => {
-    if (!isSimulationRoute) return
+    if (!hasBiomassSimulation) return
     if (!mapLoaded) return
 
     const map = mapRef.current?.getMap?.()
@@ -829,7 +891,7 @@ export function MapViewport() {
       duration: 900,
       easing: (t) => t * t * (3 - 2 * t),
     })
-  }, [biomassVisualization, isSimulationRoute, mapLoaded])
+  }, [biomassVisualization, hasBiomassSimulation, mapLoaded])
 
   const onMove = useCallback((evt: ViewStateChangeEvent) => {
     const vs = evt.viewState
@@ -970,7 +1032,7 @@ export function MapViewport() {
               setMapLoaded(true)
             }}
             onError={(e: ErrorEvent) => {
-              const message = e.error?.message ?? "Map error (check console for details)"
+              const message = e.error?.message ?? t("map.mapError")
               setMapError(message)
               console.error(e.error ?? e)
             }}
@@ -1053,7 +1115,7 @@ export function MapViewport() {
                       type="fill"
                       paint={{
                         "fill-color": ["get", "areaColor"],
-                        "fill-opacity": 0.15,
+                        "fill-opacity": 0.1,
                       }}
                     />
                     <Layer
@@ -1094,7 +1156,7 @@ export function MapViewport() {
                       type="fill"
                       paint={{
                         "fill-color": "#4f7865",
-                        "fill-opacity": 0.22,
+                        "fill-opacity": 0.5,
                       }}
                     />
                   </Source>

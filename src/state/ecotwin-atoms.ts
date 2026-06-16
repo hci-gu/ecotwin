@@ -5,8 +5,6 @@ import {
   createSimulation as createSimulationRecord,
   fileUrl,
   fetchSimAgents,
-  fetchSimById,
-  fetchSimulationResult,
   getHeightmap,
   getLandcover,
   getManagementPlan,
@@ -19,6 +17,7 @@ import {
   listTasks,
   listTiles,
   runSimulationByRecordId,
+  type SimulationRunOptions,
 } from "@/state/ecotwin-api"
 import type {
   Heightmap,
@@ -26,7 +25,6 @@ import type {
   ManagementPlan,
   OceanData,
   SimAgentsResponse,
-  SimByIdResponse,
   Simulation,
   SimulationResultBase64,
   Task,
@@ -380,25 +378,6 @@ export const refreshSimAgentsAtom = atom(null, async (get, set) => {
   }
 })
 
-export const simByIdCacheAtom = atom<Record<string, SimByIdResponse>>({})
-export const simByIdLoadingAtom = atom(false)
-export const simByIdErrorAtom = atom<Error | null>(null)
-export const fetchSimByIdAtom = atom(null, async (get, set, id: string) => {
-  if (get(simByIdLoadingAtom)) return get(simByIdCacheAtom)[id]
-  set(simByIdLoadingAtom, true)
-  set(simByIdErrorAtom, null)
-  try {
-    const res = await fetchSimById(id)
-    set(simByIdCacheAtom, (prev) => ({ ...prev, [id]: res }))
-    return res
-  } catch (err) {
-    set(simByIdErrorAtom, toError(err))
-    throw err
-  } finally {
-    set(simByIdLoadingAtom, false)
-  }
-})
-
 export const simulationResultByRecordIdAtom = atom<Record<string, SimulationResultBase64>>({})
 export const simulationResultLoadingAtom = atom(false)
 export const simulationResultErrorAtom = atom<Error | null>(null)
@@ -409,7 +388,7 @@ export const fetchSimulationResultByRecordIdAtom = atom(
     set,
     args: {
       simulationRecordId: string
-      options?: Parameters<typeof fetchSimulationResult>[1]
+      options?: SimulationRunOptions
       forceRun?: boolean
       cachedOnly?: boolean
     }
@@ -448,15 +427,12 @@ export const fetchSimulationResultByRecordIdAtom = atom(
       if (args.cachedOnly) return undefined
 
       const userOptions = args.options ?? {}
-      let defaultModelPath: { agent?: string; } = {}
+      let defaultModelPath: { agent?: string } = {}
       const simOptions = sim.options
-      // Only pass agent if present in simOptions and not overridden by userOptions
+      // Preserve an explicit per-record model selection unless the caller overrides it.
       if (simOptions && typeof simOptions === "object") {
         const opt = simOptions as Record<string, unknown>
-        if (
-          typeof opt.agent === "string" &&
-          !("agent" in userOptions)
-        ) {
+        if (typeof opt.agent === "string" && !("agent" in userOptions)) {
           defaultModelPath = { agent: opt.agent }
         }
       }
@@ -486,8 +462,9 @@ export const fetchSimulationResultByRecordIdAtom = atom(
 
       return res
     } catch (err) {
-      set(simulationResultErrorAtom, toError(err))
-      return undefined
+      const error = toError(err)
+      set(simulationResultErrorAtom, error)
+      throw error
     } finally {
       set(simulationResultLoadingAtom, false)
     }

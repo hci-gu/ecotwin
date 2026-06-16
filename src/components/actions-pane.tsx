@@ -8,6 +8,7 @@ import {
   Delete02Icon,
 } from "@hugeicons/core-free-icons"
 import { cn } from "@/lib/utils"
+import { t } from "@/lib/translations"
 import type { ManagementPlan } from "@/state/ecotwin-types"
 
 type ActionsPaneProps = {
@@ -50,7 +51,7 @@ export function ActionsPane({
     )}>
       {/* Header */}
       <div className="flex items-center justify-between px-4 py-3 border-b border-black/5">
-        <span className="text-sm font-semibold text-zinc-900">Actions</span>
+        <span className="text-sm font-semibold text-zinc-900">{t("common.actions")}</span>
         <HugeiconsIcon icon={ArrowDown01Icon} size={18} className="text-zinc-500" />
       </div>
 
@@ -60,10 +61,10 @@ export function ActionsPane({
           <>
             <div className="rounded-md border border-black/5 bg-white/70 px-3 py-2">
               <div className="text-[10px] font-bold uppercase tracking-wider text-zinc-400">
-                Active plan
+                {t("actionsPane.activePlan")}
               </div>
               <div className="mt-1 text-sm font-medium text-zinc-900">
-                {activePlan.name || "Untitled plan"}
+                {activePlan.name || t("common.untitledPlan")}
               </div>
             </div>
 
@@ -75,7 +76,7 @@ export function ActionsPane({
               className="flex w-full cursor-pointer items-center justify-center gap-2 rounded-md bg-zinc-800 px-4 py-2 text-sm font-medium text-white transition-opacity hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-50"
             >
               <HugeiconsIcon icon={PlayIcon} size={16} />
-              {isRunningSimulation ? "Running simulation..." : "Run simulation"}
+              {isRunningSimulation ? t("actionsPane.runningSimulation") : t("actionsPane.runSimulation")}
             </button>
 
             {!canRunSimulation && runDisabledReason ? (
@@ -86,7 +87,7 @@ export function ActionsPane({
           </>
         ) : (
           <div className="rounded-md border border-dashed border-black/10 bg-white/60 px-3 py-3 text-xs text-zinc-600">
-            Select a management plan for this tile to run a simulation.
+            {t("validation.selectPlanBeforeSimulation")}
           </div>
         )}
 
@@ -110,7 +111,7 @@ export function ActionsPane({
             className="flex cursor-pointer items-center justify-center gap-1.5 rounded-md border border-zinc-300/50 bg-zinc-200/50 px-3 py-1.5 text-xs font-medium text-zinc-700 transition-colors hover:bg-zinc-200/80 active:scale-95 disabled:cursor-not-allowed disabled:opacity-50"
           >
             <HugeiconsIcon icon={PencilEdit02Icon} size={14} />
-            Edit
+            {t("common.edit")}
           </button>
           <button
             type="button"
@@ -119,7 +120,7 @@ export function ActionsPane({
             className="flex cursor-pointer items-center justify-center gap-1.5 rounded-md border border-zinc-300/50 bg-zinc-200/50 px-3 py-1.5 text-xs font-medium text-zinc-700 transition-colors hover:bg-zinc-200/80 active:scale-95 disabled:cursor-not-allowed disabled:opacity-50"
           >
             <HugeiconsIcon icon={LeftToRightListDashIcon} size={14} />
-            Results
+            {t("report.results")}
           </button>
           <button
             type="button"
@@ -128,7 +129,7 @@ export function ActionsPane({
             className="flex cursor-pointer items-center justify-center gap-1.5 rounded-md border border-zinc-300/50 bg-zinc-200/50 px-3 py-1.5 text-xs font-medium text-zinc-700 transition-colors hover:bg-zinc-200/80 active:scale-95 disabled:cursor-not-allowed disabled:opacity-50"
           >
             <HugeiconsIcon icon={Download02Icon} size={14} />
-            Export
+            {t("actionsPane.export")}
           </button>
         </div>
 
@@ -139,7 +140,7 @@ export function ActionsPane({
             className="flex w-full cursor-pointer items-center justify-center gap-1.5 rounded-md border border-red-200 bg-red-50 px-3 py-1.5 text-xs font-medium text-red-700 transition-colors hover:bg-red-100 active:scale-95"
           >
             <HugeiconsIcon icon={Delete02Icon} size={14} />
-            Delete tile
+            {t("tiles.deleteTile")}
           </button>
         ) : null}
       </div>

@@ -9,7 +9,7 @@ export type TilePopulatorConfig = {
   pollIntervalMs: number
   leaseDurationMs: number
   concurrency: number
-  geoTiffPath: string
+  geoTiffPath?: string
   earthEngineCredentials: Record<string, unknown>
 }
 
@@ -49,9 +49,9 @@ export function loadConfig(): TilePopulatorConfig {
   const geoTiffPath =
     process.env.TILE_POPULATOR_GEOTIFF_PATH?.trim() ??
     fileURLToPath(new URL("../data/baltic_sea.tif", import.meta.url))
-
-  if (!existsSync(geoTiffPath)) {
-    throw new Error(`GeoTIFF file not found at ${geoTiffPath}`)
+  const availableGeoTiffPath = existsSync(geoTiffPath) ? geoTiffPath : undefined
+  if (!availableGeoTiffPath) {
+    console.warn(`[tile-populator] GeoTIFF file not found at ${geoTiffPath}; skipping depth generation`)
   }
 
   return {
@@ -64,7 +64,7 @@ export function loadConfig(): TilePopulatorConfig {
     pollIntervalMs: numberFromEnv("TILE_POPULATOR_POLL_INTERVAL_MS", 5000),
     leaseDurationMs: numberFromEnv("TILE_POPULATOR_LEASE_SECONDS", 300) * 1000,
     concurrency: numberFromEnv("TILE_POPULATOR_CONCURRENCY", 1),
-    geoTiffPath,
+    geoTiffPath: availableGeoTiffPath,
     earthEngineCredentials: loadEarthEngineCredentials(),
   }
 }
